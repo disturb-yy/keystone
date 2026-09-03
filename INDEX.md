@@ -12,16 +12,16 @@
 
 | 区域 | 当前内容 | 状态 |
 | --- | --- | --- |
-| `go.mod` | 模块 `github.com/disturb-yy/keystone`，Go `1.27` | 已声明，尚无 Go package |
-| `cmd/keystone/` | CLI 入口目录和 `.gitkeep` | 预留，暂无实现 |
-| `cmd/keystone-daemon/` | Control Plane Daemon 入口目录和 `.gitkeep` | 预留，暂无实现 |
-| `cmd/keystone-worker/` | Worker 入口目录和 `.gitkeep` | 预留，暂无实现 |
-| `configs/` | `.gitkeep` | 预留，暂无配置实现 |
-| `internal/` | 空目录 | 领域和基础设施代码尚未创建 |
+| `go.mod` | 模块 `github.com/disturb-yy/keystone`，Go `1.27` | 已声明，已有三个可编译、可测试的基础 Go package |
+| `Makefile` | `test`、`build`、`lint`、`dashboard-build` 根级验证入口 | 已存在；Dashboard 目标使用 `package-lock.json` 执行 npm 校验/构建 |
+| `docs/FE20260903080401/` | V1 基线、里程碑、验收清单和版本化 Ticket/规格文档 | 已存在，属于项目局部文档 |
+| `cmd/`、`configs/` | `cmd/keystone`、`cmd/keystone-daemon`、`cmd/keystone-worker` 与 `configs` 的 `.gitkeep` | 预留入口，无运行实现 |
+| `internal/infrastructure/` | `config`、`logging`、`id` 三个 Go package，各自含源码、测试和局部文档 | 已有基础能力，无业务或持久化实现 |
 | `docs/architecture-baseline/` | 12 个 Markdown 和 1 个 JSON 架构参考文件 | 静态设计输入 |
-| `contracts/`、`dashboard/`、`migrations/`、`scripts/` | 路径尚不存在 | 目标边界尚未落地 |
+| `dashboard/` | React、TypeScript、Vite 源码、`package.json` 与 `package-lock.json` | 已有可构建骨架，无业务页面 |
+| `contracts/`、`migrations/`、`scripts/` | 路径尚不存在 | 目标边界尚未落地 |
 
-当前工作树没有 `.go`、测试、API、数据库 Schema 或迁移实现。`.agents/`、`.codex/` 和 `.idea/` 属于工作区或 IDE 工具目录，不纳入项目架构导航。
+当前工作树已有基础 `.go`、Go 测试和 Dashboard 前端源码，但没有 Daemon、Worker、API、数据库 Schema 或迁移实现。`.agents/`、`.codex/` 和 `.idea/` 属于工作区或 IDE 工具目录，不纳入项目架构导航。
 
 ## Architecture Map
 
@@ -54,9 +54,8 @@ Human
 
 | 路径 | 地图位置 | 当前状态 |
 | --- | --- | --- |
-| `cmd/keystone/` | CLI 入口 | 仅 `.gitkeep` |
-| `cmd/keystone-daemon/` | Control Plane Daemon 入口 | 仅 `.gitkeep` |
-| `dashboard/` | Local Web UI Client | 尚未创建 |
+| `cmd/` | CLI、Daemon、Worker 入口边界 | 仅含预留子目录和 `.gitkeep`，没有已实现入口 |
+| `dashboard/` | Local Web UI Client | 已有 React/TypeScript/Vite 骨架与锁文件 |
 
 ### L2 — Contract
 
@@ -98,7 +97,7 @@ Intent → Understand → Design → Plan → Ticketize → Execute → Verify �
 
 | 目标路径 | 地图位置 | 当前状态 |
 | --- | --- | --- |
-| `internal/infrastructure/` | Repository、Provider、Cache、Storage、External API 和其他 Adapter | 尚未创建 |
+| `internal/infrastructure/` | 当前为 config、logging、id 三个标准库基础 package；未来可扩展 Adapter | 已有窄职责基础能力，尚无 Repository/DB 实现 |
 | `migrations/` | 数据库 Schema / Migration 文件 | 尚未创建 |
 | `configs/` | 运行配置和默认配置 | 只有 `.gitkeep` |
 
@@ -106,7 +105,7 @@ Infrastructure 是 Control Plane 的基础设施适配区域。具体依赖和�
 
 ### L6 — Worker / Side Effects
 
-`cmd/keystone-worker/` 是 Worker 进程入口的预留位置。Worker 位于 Worker Protocol 下游，连接 Assigned Workspace、Runtime 和 Tools；当前仅有 `.gitkeep`。
+`cmd/` 是 CLI、Daemon 和 Worker 进程入口的目标边界。Worker 位于 Worker Protocol 下游，连接 Assigned Workspace、Runtime 和 Tools；当前没有已实现的 Worker 入口。
 
 ## Relationship Map
 
@@ -123,7 +122,9 @@ Daemon → contracts/worker → Worker
 
 上图是目标架构关系；依赖方向和跨边界约束以 `AGENTS.md` 为唯一规约来源。
 
-## Truth Map
+## Target Truth Map
+
+以下 ownership 是目标架构约束，不是当前 checkout 的运行时事实。
 
 | Owner | 当前地图中的权威内容 |
 | --- | --- |
@@ -153,11 +154,11 @@ Daemon → contracts/worker → Worker
 - 当前规约来源：`AGENTS.md`。
 - 架构参考：`docs/architecture-baseline/README.md`、`00-architecture-overview.md`、`03-domain-model.md`、`04-subsystems.md`、`05-runtime-topology.md`、`06-governance-and-execution.md`、`08-v1-scope.md`、`09-decision-log.md`、`architecture-summary.json`。
 - Graphify 输出、CodeMap 输出和 MCP 代码地图：当前未发现。
-- 当前没有可运行的 Go package；最近一次 Go 工具检查返回 `no packages`。
+- 当前已有三个可编译、可测试的基础 Go package：`internal/infrastructure/config`、`internal/infrastructure/logging` 和 `internal/infrastructure/id`。
 
 ## Freshness
 
 - 生成日期：`2026-09-03`。
 - Graphify 输出、CodeMap 输出和 MCP 代码地图：当前未发现。
-- `contracts/`、`dashboard/`、`migrations/`、`scripts/` 尚未创建，具体实现边界仍待源码落地后确认。
+- `Makefile` 已创建根级验证入口；`dashboard/` 与 `internal/infrastructure/{config,logging,id}/` 已落地，`contracts/`、`migrations/`、`scripts/` 尚未创建，具体实现边界仍待源码落地后确认。
 - 新增实现、创建目标目录或刷新架构 / 代码地图后，本索引需要重新对齐。

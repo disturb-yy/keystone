@@ -17,10 +17,12 @@
 ## 当前仓库事实
 
 - `go.mod` 声明模块 `github.com/disturb-yy/keystone`，Go 版本为 `1.27`。
-- `docs/architecture-baseline/` 保存 12 个 Markdown 和 1 个 JSON 架构参考文件。
-- `cmd/keystone/`、`cmd/keystone-daemon/`、`cmd/keystone-worker/` 和 `configs/` 当前只包含 `.gitkeep` 标记文件。
-- `internal/` 当前为空目录；`contracts/`、`dashboard/`、`migrations/`、`scripts/` 当前尚未创建。
-- 当前工作树没有 `.go`、测试、API、数据库 Schema 或迁移实现。架构参考中的流程、名称和拓扑是设计输入，不是当前服务行为的证据。
+- `Makefile` 已提供根级 `test`、`build`、`lint` 和 `dashboard-build` 入口；其中 Dashboard 目标预期从 `dashboard/package-lock.json` 安装依赖后运行 npm 命令。
+- `docs/FE20260903080401/` 保存 V1 实施基线、里程碑、验收清单和版本化 Ticket/规格文档。
+- `docs/architecture-baseline/` 保存 12 个 Markdown 和 1 个 JSON 架构参考文件；这些文件是静态设计输入。
+- `internal/infrastructure/config`、`internal/infrastructure/logging` 和 `internal/infrastructure/id` 已是三个标准库 Go package，各自有源码、聚焦测试以及局部 `AGENTS.md`/`INDEX.md`；它们只提供配置解析、结构化日志和 UUIDv4 生成，不实现业务或持久化行为。
+- `dashboard/` 已有 React、TypeScript、Vite 工程、`package-lock.json` 和构建/检查脚本；`cmd/keystone`、`cmd/keystone-daemon`、`cmd/keystone-worker` 与 `configs` 保留当前的 `.gitkeep` 预留事实。`contracts/`、`migrations/` 和 `scripts/` 当前尚未创建。
+- 当前工作树已有 Go 基础源码和测试、Dashboard 前端源码及构建产物，但没有 Daemon、Worker、API、数据库 Schema 或迁移实现。根 Make 入口验证的是现有基础能力与 Dashboard 工程；架构参考中的流程、名称和拓扑不是当前服务行为的证据。
 
 ## Architecture
 
@@ -73,7 +75,9 @@ Project → Change → Ticket Dependency Graph → Ticket → Execution DAG → 
 
 五个子系统是逻辑职责边界，不拆成五个微服务。V1 保持一个本机 Daemon 管理多个 Project，一个独立 Worker 执行副作用，默认使用 Git Worktree 隔离 Workspace。
 
-### 状态与事实边界
+### 目标状态与事实边界
+
+以下是目标架构的状态与事实边界；当前 checkout 尚无对应服务实现。
 
 - Control Plane Daemon 持有 Project、Change、Ticket、Gate、Decision、Evidence、Execution 和派生追踪信息的权威持久状态。
 - Repository 持有源码和版本化项目知识；Git 持有代码版本事实。
@@ -90,7 +94,7 @@ Project → Change → Ticket Dependency Graph → Ticket → Execution DAG → 
 └── domain/       # 业务强边界
 ```
 
-目标领域边界为 `internal/work`、`internal/planning`、`internal/governance`、`internal/execution` 和 `internal/traceability`；`internal/infrastructure` 提供跨领域的基础设施适配。上述目录当前尚未实现，新增代码时以实际目标领域和最近一级文档为准。
+目标领域边界为 `internal/work`、`internal/planning`、`internal/governance`、`internal/execution` 和 `internal/traceability`；`internal/infrastructure` 已承载 config、logging、id 三个窄职责基础 package。上述业务领域目录当前尚未实现，新增代码时以实际目标领域和最近一级文档为准。
 
 复杂度较低时：
 
@@ -302,7 +306,7 @@ context.Context
 
 ## Coding Style
 
-- 文档使用中文编写。
+- 文档和注释使用中文编写。
 - 函数添加必要的注释。
 - 注释说明业务原因、约束、不变量、恢复顺序或设计取舍，不逐行复述实现。
 - 单函数避免过长，复杂函数按业务职责拆分，不进行无意义的碎片化抽象。

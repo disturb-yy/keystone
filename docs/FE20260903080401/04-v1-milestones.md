@@ -12,15 +12,18 @@
 - DDD + Modular Monolith 目录
 - AGENTS.md / INDEX.md 规范
 - Build / Test / Lint 基础
-- Config / Logging / ID / Migration 基础
+- Config / Logging / ID 基础
 - React + TypeScript + Vite Dashboard 骨架
+
+M0 不实现或预占 Migration 调用、Migration runner、版本表、SQLite、数据目录或对应占位目录；Migration、SQLite 和数据目录由 Ticket 02「Local State and Boundary Contracts」负责。
 
 Done：
 
 ```text
-go test ./...
+make test
 make build
-npm run build
+make lint
+make dashboard-build
 ```
 
 ## M1 — CLI → Daemon → SQLite
