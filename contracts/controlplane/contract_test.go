@@ -47,6 +47,128 @@ func TestHealthResponseJSON(t *testing.T) {
 	}
 }
 
+func TestDaemonStatusResponseJSON(t *testing.T) {
+	tests := []struct {
+		name  string
+		input DaemonStatusResponse
+		want  string
+	}{
+		{
+			name: "ready status",
+			input: DaemonStatusResponse{
+				DatabasePath:           "/tmp/keystone/keystone.db",
+				SchemaMigrationVersion: 1,
+				DaemonReadiness:        true,
+				DaemonInstanceID:       "daemon-123",
+			},
+			want: `{"database_path":"/tmp/keystone/keystone.db","schema_migration_version":1,"daemon_readiness":true,"daemon_instance_id":"daemon-123"}`,
+		},
+		{
+			name:  "zero value keeps all fields",
+			input: DaemonStatusResponse{},
+			want:  `{"database_path":"","schema_migration_version":0,"daemon_readiness":false,"daemon_instance_id":""}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			encoded, err := json.Marshal(tt.input)
+			if err != nil {
+				t.Fatalf("json.Marshal() error = %v", err)
+			}
+			if string(encoded) != tt.want {
+				t.Fatalf("json.Marshal() = %s, want %s", encoded, tt.want)
+			}
+
+			var decoded DaemonStatusResponse
+			if err := json.Unmarshal([]byte(tt.want), &decoded); err != nil {
+				t.Fatalf("json.Unmarshal() error = %v", err)
+			}
+			if decoded != tt.input {
+				t.Fatalf("decoded = %+v, want %+v", decoded, tt.input)
+			}
+		})
+	}
+}
+
+func TestDaemonStopRequestJSON(t *testing.T) {
+	tests := []struct {
+		name  string
+		input DaemonStopRequest
+		want  string
+	}{
+		{
+			name:  "current instance is required",
+			input: DaemonStopRequest{DaemonInstanceID: "daemon-123"},
+			want:  `{"daemon_instance_id":"daemon-123"}`,
+		},
+		{
+			name:  "zero value keeps required field",
+			input: DaemonStopRequest{},
+			want:  `{"daemon_instance_id":""}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			encoded, err := json.Marshal(tt.input)
+			if err != nil {
+				t.Fatalf("json.Marshal() error = %v", err)
+			}
+			if string(encoded) != tt.want {
+				t.Fatalf("json.Marshal() = %s, want %s", encoded, tt.want)
+			}
+
+			var decoded DaemonStopRequest
+			if err := json.Unmarshal([]byte(tt.want), &decoded); err != nil {
+				t.Fatalf("json.Unmarshal() error = %v", err)
+			}
+			if decoded != tt.input {
+				t.Fatalf("decoded = %+v, want %+v", decoded, tt.input)
+			}
+		})
+	}
+}
+
+func TestDaemonStopResponseJSON(t *testing.T) {
+	tests := []struct {
+		name  string
+		input DaemonStopResponse
+		want  string
+	}{
+		{
+			name:  "accepted by current instance",
+			input: DaemonStopResponse{Accepted: true, DaemonInstanceID: "daemon-123"},
+			want:  `{"accepted":true,"daemon_instance_id":"daemon-123"}`,
+		},
+		{
+			name:  "zero value",
+			input: DaemonStopResponse{},
+			want:  `{"accepted":false,"daemon_instance_id":""}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			encoded, err := json.Marshal(tt.input)
+			if err != nil {
+				t.Fatalf("json.Marshal() error = %v", err)
+			}
+			if string(encoded) != tt.want {
+				t.Fatalf("json.Marshal() = %s, want %s", encoded, tt.want)
+			}
+
+			var decoded DaemonStopResponse
+			if err := json.Unmarshal([]byte(tt.want), &decoded); err != nil {
+				t.Fatalf("json.Unmarshal() error = %v", err)
+			}
+			if decoded != tt.input {
+				t.Fatalf("decoded = %+v, want %+v", decoded, tt.input)
+			}
+		})
+	}
+}
+
 func TestErrorEnvelopeJSON(t *testing.T) {
 	tests := []struct {
 		name  string

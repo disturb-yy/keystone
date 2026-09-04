@@ -29,6 +29,34 @@ type HealthResponse struct {
 	Ready bool `json:"ready"`
 }
 
+// DaemonStatusResponse 是 GET /v1/daemon/status 的成功响应。
+//
+// 该类型只表达 Daemon 当前状态和持久化状态元数据的传输快照；数据库查询、
+// readiness 判定和 HTTP 状态码由边界外的实现负责。
+type DaemonStatusResponse struct {
+	DatabasePath           string `json:"database_path"`
+	SchemaMigrationVersion int    `json:"schema_migration_version"`
+	DaemonReadiness        bool   `json:"daemon_readiness"`
+	DaemonInstanceID       string `json:"daemon_instance_id"`
+}
+
+// DaemonStopRequest 是 POST /v1/daemon/stop 的请求。
+//
+// DaemonInstanceID 是请求中必需提供的实例标识；缺失或空值的校验由 HTTP
+// Adapter 负责。该 Command 不在传输体中携带 Idempotency-Key。
+type DaemonStopRequest struct {
+	DaemonInstanceID string `json:"daemon_instance_id"`
+}
+
+// DaemonStopResponse 是 Daemon 接受停止请求后的成功响应。
+//
+// Accepted 表示当前实例已接受优雅停止请求；DaemonInstanceID 标识接受该
+// 请求的当前实例。
+type DaemonStopResponse struct {
+	Accepted         bool   `json:"accepted"`
+	DaemonInstanceID string `json:"daemon_instance_id"`
+}
+
 // ErrEmptyIdempotencyKey 表示幂等键为空。
 var ErrEmptyIdempotencyKey = errors.New("idempotency key must not be empty")
 

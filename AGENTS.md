@@ -16,15 +16,15 @@
 
 ## 当前仓库事实
 
-- `go.mod` 声明模块 `github.com/disturb-yy/keystone`，Go 版本为 `1.27`。
+- `go.mod` 声明模块 `github.com/disturb-yy/keystone`，Go 版本为 `1.27`，并包含当前 CLI 所需的 Cobra、跨平台锁所需的 `golang.org/x/sys` 和纯 Go SQLite driver `modernc.org/sqlite`。
 - `Makefile` 已提供根级 `test`、`build`、`lint` 和 `dashboard-build` 入口；其中 Dashboard 目标预期从 `dashboard/package-lock.json` 安装依赖后运行 npm 命令。
 - `docs/FE20260903080401/` 保存 V1 实施基线、里程碑、验收清单和版本化 Ticket/规格文档。
 - `docs/FE20260903080401/` 下的 Ticket 02 目录包含本地状态、Migration 和边界 Contract 的实施规格与验收记录；`docs/architecture-baseline/` 不在本工作树中，若由其他 checkout 提供也只属于静态设计输入。
 - `internal/infrastructure/config`、`internal/infrastructure/logging` 和 `internal/infrastructure/id` 已是三个标准库 Go package，各自有源码、聚焦测试以及局部 `AGENTS.md`/`INDEX.md`；它们只提供配置解析、结构化日志和 UUIDv7 生成，不实现业务或持久化行为。
 - `internal/infrastructure/localstate` 提供数据根路径、目录初始化、跨平台单实例锁和诊断元数据；`internal/infrastructure/migration` 提供基于纯 Go SQLite driver 的 `t_schema_migrations` runner。两者均不实现 Daemon 或业务 Schema。
-- `contracts/controlplane` 与 `contracts/worker` 已提供 `/v1` Control Plane 和 Worker 的最小 JSON 边界 DTO，各自有局部 `AGENTS.md`/`INDEX.md`；它们不引用 Domain、不访问 SQLite。
-- `dashboard/` 已有 React、TypeScript、Vite 工程、`package-lock.json` 和构建/检查脚本；`cmd/keystone`、`cmd/keystone-daemon`、`cmd/keystone-worker` 与 `configs` 保留当前的 `.gitkeep` 预留事实，`migrations/` 和 `scripts/` 当前尚未创建。
-- 当前工作树已有 Go 基础源码、Ticket 02 基础设施与边界 Contract 测试、Dashboard 前端源码及构建产物，但没有 Daemon、Worker、HTTP API、业务数据库 Schema 或运行时执行实现。根 Make 入口验证的是当前已落地的 Go package 与 Dashboard 工程；目标架构和静态设计输入不是服务行为证据。
+- `contracts/controlplane` 已提供 `/v1` Control Plane 的 Health、Error、Daemon status/stop 最小 JSON 边界 DTO；`contracts/worker` 已提供 Worker DTO。两者各自有局部 `AGENTS.md`/`INDEX.md`，不引用 Domain、不访问 SQLite，Control Plane Contract 不实现 HTTP Handler。
+- `dashboard/` 已有 React、TypeScript、Vite 工程、`package-lock.json` 和构建/检查脚本；`cmd/keystone` 与 `cmd/keystone-daemon` 已落地 CLI 和独立 Daemon 入口，`cmd/keystone-worker`、`configs`、`migrations/` 和 `scripts/` 当前尚未创建。
+- `internal/daemon` 已落地 Daemon 生命周期、loopback HTTP、SQLite readiness 和资源关闭；它使用 `internal/infrastructure/localstate` 的锁/运行元数据和 `internal/infrastructure/migration` 的 `t_schema_migrations`，当前不创建业务 Schema。当前工作树仍没有 Worker runtime、Project/Change/Ticket 业务行为或业务数据库 Schema。根 Make 入口验证的是当前已落地的 Go package 与 Dashboard 工程；目标架构和静态设计输入不是服务行为证据。
 
 ## Architecture
 
@@ -79,7 +79,8 @@ Project → Change → Ticket Dependency Graph → Ticket → Execution DAG → 
 
 ### 目标状态与事实边界
 
-以下是目标架构的状态与事实边界；当前 checkout 尚无对应服务实现。
+以下是目标架构的状态与事实边界；当前 checkout 已落地 M1 本机 CLI/Daemon
+运行链，但完整业务服务和后续 Worker 执行链尚无实现。
 
 - Control Plane Daemon 持有 Project、Change、Ticket、Gate、Decision、Evidence、Execution 和派生追踪信息的权威持久状态。
 - Repository 持有源码和版本化项目知识；Git 持有代码版本事实。
