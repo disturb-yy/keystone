@@ -20,7 +20,7 @@
 - `Makefile` 已提供根级 `test`、`build`、`lint` 和 `dashboard-build` 入口；其中 Dashboard 目标预期从 `dashboard/package-lock.json` 安装依赖后运行 npm 命令。
 - `docs/FE20260903080401/` 保存 V1 实施基线、里程碑、验收清单和版本化 Ticket/规格文档。
 - `docs/architecture-baseline/` 保存 12 个 Markdown 和 1 个 JSON 架构参考文件；这些文件是静态设计输入。
-- `internal/infrastructure/config`、`internal/infrastructure/logging` 和 `internal/infrastructure/id` 已是三个标准库 Go package，各自有源码、聚焦测试以及局部 `AGENTS.md`/`INDEX.md`；它们只提供配置解析、结构化日志和 UUIDv4 生成，不实现业务或持久化行为。
+- `internal/infrastructure/config`、`internal/infrastructure/logging` 和 `internal/infrastructure/id` 已是三个标准库 Go package，各自有源码、聚焦测试以及局部 `AGENTS.md`/`INDEX.md`；它们只提供配置解析、结构化日志和 UUIDv7 生成，不实现业务或持久化行为。
 - `dashboard/` 已有 React、TypeScript、Vite 工程、`package-lock.json` 和构建/检查脚本；`cmd/keystone`、`cmd/keystone-daemon`、`cmd/keystone-worker` 与 `configs` 保留当前的 `.gitkeep` 预留事实。`contracts/`、`migrations/` 和 `scripts/` 当前尚未创建。
 - 当前工作树已有 Go 基础源码和测试、Dashboard 前端源码及构建产物，但没有 Daemon、Worker、API、数据库 Schema 或迁移实现。根 Make 入口验证的是现有基础能力与 Dashboard 工程；架构参考中的流程、名称和拓扑不是当前服务行为的证据。
 

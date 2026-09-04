@@ -16,7 +16,7 @@
 | `Makefile` | `test`、`build`、`lint`、`dashboard-build` 根级验证入口 | 已存在；Dashboard 目标使用 `package-lock.json` 执行 npm 校验/构建 |
 | `docs/FE20260903080401/` | V1 基线、里程碑、验收清单和版本化 Ticket/规格文档 | 已存在，属于项目局部文档 |
 | `cmd/`、`configs/` | `cmd/keystone`、`cmd/keystone-daemon`、`cmd/keystone-worker` 与 `configs` 的 `.gitkeep` | 预留入口，无运行实现 |
-| `internal/infrastructure/` | `config`、`logging`、`id` 三个 Go package，各自含源码、测试和局部文档 | 已有基础能力，无业务或持久化实现 |
+| `internal/infrastructure/` | `config`、`logging`、`id` 三个 Go package，各自含源码、测试和局部文档；`id` 使用标准库 UUIDv7 | 已有基础能力，无业务或持久化实现 |
 | `docs/architecture-baseline/` | 12 个 Markdown 和 1 个 JSON 架构参考文件 | 静态设计输入 |
 | `dashboard/` | React、TypeScript、Vite 源码、`package.json` 与 `package-lock.json` | 已有可构建骨架，无业务页面 |
 | `contracts/`、`migrations/`、`scripts/` | 路径尚不存在 | 目标边界尚未落地 |
