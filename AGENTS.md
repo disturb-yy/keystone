@@ -19,10 +19,12 @@
 - `go.mod` 声明模块 `github.com/disturb-yy/keystone`，Go 版本为 `1.27`。
 - `Makefile` 已提供根级 `test`、`build`、`lint` 和 `dashboard-build` 入口；其中 Dashboard 目标预期从 `dashboard/package-lock.json` 安装依赖后运行 npm 命令。
 - `docs/FE20260903080401/` 保存 V1 实施基线、里程碑、验收清单和版本化 Ticket/规格文档。
-- `docs/architecture-baseline/` 保存 12 个 Markdown 和 1 个 JSON 架构参考文件；这些文件是静态设计输入。
+- `docs/FE20260903080401/` 下的 Ticket 02 目录包含本地状态、Migration 和边界 Contract 的实施规格与验收记录；`docs/architecture-baseline/` 不在本工作树中，若由其他 checkout 提供也只属于静态设计输入。
 - `internal/infrastructure/config`、`internal/infrastructure/logging` 和 `internal/infrastructure/id` 已是三个标准库 Go package，各自有源码、聚焦测试以及局部 `AGENTS.md`/`INDEX.md`；它们只提供配置解析、结构化日志和 UUIDv7 生成，不实现业务或持久化行为。
-- `dashboard/` 已有 React、TypeScript、Vite 工程、`package-lock.json` 和构建/检查脚本；`cmd/keystone`、`cmd/keystone-daemon`、`cmd/keystone-worker` 与 `configs` 保留当前的 `.gitkeep` 预留事实。`contracts/`、`migrations/` 和 `scripts/` 当前尚未创建。
-- 当前工作树已有 Go 基础源码和测试、Dashboard 前端源码及构建产物，但没有 Daemon、Worker、API、数据库 Schema 或迁移实现。根 Make 入口验证的是现有基础能力与 Dashboard 工程；架构参考中的流程、名称和拓扑不是当前服务行为的证据。
+- `internal/infrastructure/localstate` 提供数据根路径、目录初始化、跨平台单实例锁和诊断元数据；`internal/infrastructure/migration` 提供基于纯 Go SQLite driver 的 `t_schema_migrations` runner。两者均不实现 Daemon 或业务 Schema。
+- `contracts/controlplane` 与 `contracts/worker` 已提供 `/v1` Control Plane 和 Worker 的最小 JSON 边界 DTO，各自有局部 `AGENTS.md`/`INDEX.md`；它们不引用 Domain、不访问 SQLite。
+- `dashboard/` 已有 React、TypeScript、Vite 工程、`package-lock.json` 和构建/检查脚本；`cmd/keystone`、`cmd/keystone-daemon`、`cmd/keystone-worker` 与 `configs` 保留当前的 `.gitkeep` 预留事实，`migrations/` 和 `scripts/` 当前尚未创建。
+- 当前工作树已有 Go 基础源码、Ticket 02 基础设施与边界 Contract 测试、Dashboard 前端源码及构建产物，但没有 Daemon、Worker、HTTP API、业务数据库 Schema 或运行时执行实现。根 Make 入口验证的是当前已落地的 Go package 与 Dashboard 工程；目标架构和静态设计输入不是服务行为证据。
 
 ## Architecture
 
@@ -94,7 +96,7 @@ Project → Change → Ticket Dependency Graph → Ticket → Execution DAG → 
 └── domain/       # 业务强边界
 ```
 
-目标领域边界为 `internal/work`、`internal/planning`、`internal/governance`、`internal/execution` 和 `internal/traceability`；`internal/infrastructure` 已承载 config、logging、id 三个窄职责基础 package。上述业务领域目录当前尚未实现，新增代码时以实际目标领域和最近一级文档为准。
+目标领域边界为 `internal/work`、`internal/planning`、`internal/governance`、`internal/execution` 和 `internal/traceability`；`internal/infrastructure` 当前承载 config、logging、id、localstate 和 migration 五个窄职责基础 package。上述业务领域目录当前尚未实现，新增代码时以实际目标领域和最近一级文档为准。
 
 复杂度较低时：
 

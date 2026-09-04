@@ -6,22 +6,24 @@
 
 - `AGENTS.md` 定义修改前置条件、分层职责、依赖方向、命名、测试和变更纪律。
 - `INDEX.md` 记录当前路径、目标架构位置、上下游关系、导航入口和事实状态。
-- `docs/architecture-baseline/` 记录设计输入；当前状态栏只描述 checkout 中已经存在的内容。
+- `docs/FE20260903080401/` 记录版本化 Ticket 与实施规格；当前状态栏只描述 checkout 中已经存在的内容。
 
 ## 当前仓库状态
 
 | 区域 | 当前内容 | 状态 |
 | --- | --- | --- |
-| `go.mod` | 模块 `github.com/disturb-yy/keystone`，Go `1.27` | 已声明，已有三个可编译、可测试的基础 Go package |
+| `go.mod` | 模块 `github.com/disturb-yy/keystone`，Go `1.27`，依赖 `golang.org/x/sys` 与 `modernc.org/sqlite` | 已声明，支持 Ticket 02 的跨平台锁和纯 Go SQLite 基线 |
 | `Makefile` | `test`、`build`、`lint`、`dashboard-build` 根级验证入口 | 已存在；Dashboard 目标使用 `package-lock.json` 执行 npm 校验/构建 |
-| `docs/FE20260903080401/` | V1 基线、里程碑、验收清单和版本化 Ticket/规格文档 | 已存在，属于项目局部文档 |
+| `docs/FE20260903080401/` | V1 基线、里程碑、验收清单和版本化 Ticket/规格文档 | 已存在；Ticket 02 的 spec 与 01-05 验收记录已在当前树 |
 | `cmd/`、`configs/` | `cmd/keystone`、`cmd/keystone-daemon`、`cmd/keystone-worker` 与 `configs` 的 `.gitkeep` | 预留入口，无运行实现 |
-| `internal/infrastructure/` | `config`、`logging`、`id` 三个 Go package，各自含源码、测试和局部文档；`id` 使用标准库 UUIDv7 | 已有基础能力，无业务或持久化实现 |
-| `docs/architecture-baseline/` | 12 个 Markdown 和 1 个 JSON 架构参考文件 | 静态设计输入 |
+| `internal/infrastructure/` | `config`、`logging`、`id`、`localstate`、`migration` 五个 Go package，各自含源码、测试和局部文档 | 已有基础能力；`localstate` 与 `migration` 落地 Ticket 02 的本机状态和 SQLite 元数据基线 |
+| `contracts/controlplane/` | `/v1` 版本前缀、错误 envelope、健康 DTO、`Idempotency-Key` 表达 | 已落地独立 JSON Contract package，无 HTTP Handler |
+| `contracts/worker/` | `Register`、`Heartbeat`、`Assignment`、`Report` 传输 DTO | 已落地独立 JSON Contract package，无 Worker runtime |
+| `docs/architecture-baseline/` | 架构参考目录 | 当前工作树不存在；目标架构文字不作为运行行为证据 |
 | `dashboard/` | React、TypeScript、Vite 源码、`package.json` 与 `package-lock.json` | 已有可构建骨架，无业务页面 |
-| `contracts/`、`migrations/`、`scripts/` | 路径尚不存在 | 目标边界尚未落地 |
+| `migrations/`、`scripts/` | 根级路径尚不存在 | Ticket 02 的 Migration runner 位于 `internal/infrastructure/migration/`；未创建根级迁移资产或脚本 |
 
-当前工作树已有基础 `.go`、Go 测试和 Dashboard 前端源码，但没有 Daemon、Worker、API、数据库 Schema 或迁移实现。`.agents/`、`.codex/` 和 `.idea/` 属于工作区或 IDE 工具目录，不纳入项目架构导航。
+当前工作树已有基础 `.go`、Ticket 02 基础设施与 Contract 测试以及 Dashboard 前端源码，但没有 Daemon、Worker、HTTP API、业务数据库 Schema 或 Worker runtime。`.agents/`、`.codex/` 和 `.idea/` 属于工作区或 IDE 工具目录，不纳入项目架构导航。
 
 ## Architecture Map
 
@@ -61,8 +63,8 @@ Human
 
 | 路径 | 连接对象 | 当前状态 |
 | --- | --- | --- |
-| `contracts/controlplane/` | CLI / Dashboard ↔ Daemon 的 Control Plane API | 尚未创建 |
-| `contracts/worker/` | Daemon ↔ Worker 的 Narrow Worker Protocol | 尚未创建 |
+| `contracts/controlplane/` | CLI / Dashboard ↔ Daemon 的 Control Plane API | 已落地 `/v1` DTO；HTTP 路由和 Daemon 尚未实现 |
+| `contracts/worker/` | Daemon ↔ Worker 的 Narrow Worker Protocol | 已落地四组 DTO；Worker 进程和协议处理尚未实现 |
 
 ### L3 — Application
 
@@ -97,8 +99,10 @@ Intent → Understand → Design → Plan → Ticketize → Execute → Verify �
 
 | 目标路径 | 地图位置 | 当前状态 |
 | --- | --- | --- |
-| `internal/infrastructure/` | 当前为 config、logging、id 三个标准库基础 package；未来可扩展 Adapter | 已有窄职责基础能力，尚无 Repository/DB 实现 |
-| `migrations/` | 数据库 Schema / Migration 文件 | 尚未创建 |
+| `internal/infrastructure/` | `config`、`logging`、`id`、`localstate`、`migration` 基础 package | 已有窄职责基础能力；`localstate` 管理本机状态边界，`migration` 管理 SQLite 元数据 Migration，尚无业务 Repository |
+| `internal/infrastructure/localstate/` | 数据根、目录初始化、跨平台单实例锁和运行元数据 | 已落地；不拥有 Daemon 生命周期或业务状态 |
+| `internal/infrastructure/migration/` | 纯 Go SQLite `t_schema_migrations` runner | 已落地；只增量、事务应用、重复跳过和漂移失败 |
+| `migrations/` | 根级数据库 Schema / Migration 文件 | 当前未创建；业务 Schema 不属于 Ticket 02 |
 | `configs/` | 运行配置和默认配置 | 只有 `.gitkeep` |
 
 Infrastructure 是 Control Plane 的基础设施适配区域。具体依赖和实现规则见 `AGENTS.md` 的 Infrastructure Rules。
@@ -143,7 +147,7 @@ Daemon → contracts/worker → Worker
 | 领域对象 | `internal/<area>/domain/` | L4 Domain Map |
 | 用例编排 | 对应 `internal/<area>/` Application 区域 | L3 Application |
 | 持久化或外部适配 | `internal/infrastructure/` | L5 Infrastructure、`migrations/` |
-| 总体架构 | `docs/architecture-baseline/README.md` | `00` 至 `10` 文档和 `architecture-summary.json` |
+| Ticket 02 实现 | `docs/FE20260903080401/tickets/02-local-state-and-boundary-contracts/` | spec、子 Ticket、localstate/migration/Contract 实现与验收记录 |
 
 规则、修改前阅读顺序和验证要求见 `AGENTS.md`；本表只提供定位关系。
 
@@ -152,13 +156,13 @@ Daemon → contracts/worker → Worker
 - 当前树与路径：`find . -path './.git' -prune -o -print`、`rg --files -uu`。
 - 模块声明：`go.mod`。
 - 当前规约来源：`AGENTS.md`。
-- 架构参考：`docs/architecture-baseline/README.md`、`00-architecture-overview.md`、`03-domain-model.md`、`04-subsystems.md`、`05-runtime-topology.md`、`06-governance-and-execution.md`、`08-v1-scope.md`、`09-decision-log.md`、`architecture-summary.json`。
+- Ticket 02 规格：`docs/FE20260903080401/tickets/02-local-state-and-boundary-contracts/spec/02-local-state-and-boundary-contracts-spec.md` 及其父 Ticket/子 Ticket。
 - Graphify 输出、CodeMap 输出和 MCP 代码地图：当前未发现。
-- 当前已有三个可编译、可测试的基础 Go package：`internal/infrastructure/config`、`internal/infrastructure/logging` 和 `internal/infrastructure/id`。
+- 当前已有七个可编译、可测试的 Go package：`contracts/controlplane`、`contracts/worker`、`internal/infrastructure/config`、`internal/infrastructure/logging`、`internal/infrastructure/id`、`internal/infrastructure/localstate` 和 `internal/infrastructure/migration`。
 
 ## Freshness
 
-- 生成日期：`2026-09-03`。
+- 生成日期：`2026-09-04`。
 - Graphify 输出、CodeMap 输出和 MCP 代码地图：当前未发现。
-- `Makefile` 已创建根级验证入口；`dashboard/` 与 `internal/infrastructure/{config,logging,id}/` 已落地，`contracts/`、`migrations/`、`scripts/` 尚未创建，具体实现边界仍待源码落地后确认。
+- `Makefile` 提供根级验证入口；`dashboard/`、`contracts/{controlplane,worker}/` 与 `internal/infrastructure/{config,logging,id,localstate,migration}/` 已落地。`migrations/`、`scripts/`、Daemon、Worker runtime 和 HTTP API 尚未创建。
 - 新增实现、创建目标目录或刷新架构 / 代码地图后，本索引需要重新对齐。

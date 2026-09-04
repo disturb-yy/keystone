@@ -2,13 +2,15 @@
 
 ## 边界
 
-`internal/infrastructure/` 当前承载三个职责明确的跨领域基础能力：
+`internal/infrastructure/` 当前承载五个职责明确的跨领域基础能力：
 
 - `config/` 读取并解析 `KEYSTONE_LOG_LEVEL` 环境变量。
 - `logging/` 创建由调用者指定输出目标和等级的 JSON 结构化 logger。
 - `id/` 使用 Go 1.27 标准库 `uuid.NewV7()` 生成时间有序的 UUIDv7 字符串。
+- `localstate/` 解析 Keystone 本机数据根，初始化固定目录，提供跨平台单实例锁和诊断元数据。
+- `migration/` 使用纯 Go `modernc.org/sqlite` 在调用方连接上执行 `t_schema_migrations` 增量 Migration。
 
-这些 package 只使用 Go 标准库，不承载领域语义、数据库、迁移、数据目录、进程协议或全局运行状态。
+这些 package 不承载领域语义、Daemon 生命周期、Worker 监管、业务 Schema 或进程协议。`localstate` 和 `migration` 是 Ticket 02 的本机边界基础设施；它们不拥有调用方的数据库连接或单实例锁生命周期。
 
 ## 依赖约束
 
