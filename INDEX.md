@@ -6,6 +6,7 @@
 
 - `AGENTS.md` 定义修改前置条件、分层职责、依赖方向、命名、测试和变更纪律。
 - `INDEX.md` 记录当前路径、目标架构位置、上下游关系、导航入口和事实状态。
+- `CONTEXT.md` 定义稳定术语；`docs/adr/` 记录已接受的难逆架构决策，二者不作为运行实现证据。
 - `docs/FE20260903080401/` 记录版本化 Ticket 与实施规格；当前状态栏只描述 checkout 中已经存在的内容。
 
 ## 当前仓库状态
@@ -15,6 +16,7 @@
 | `go.mod` | 模块 `github.com/disturb-yy/keystone`，Go `1.27`，依赖 `golang.org/x/sys` 与 `modernc.org/sqlite` | 已声明，支持 Ticket 02 的跨平台锁和纯 Go SQLite 基线 |
 | `Makefile` | `test`、`build`、`lint`、`dashboard-build` 根级验证入口 | 已存在；Dashboard 目标使用 `package-lock.json` 执行 npm 校验/构建 |
 | `docs/FE20260903080401/` | V1 基线、里程碑、验收清单和版本化 Ticket/规格文档 | 已存在；Ticket 02 的 spec 与 01-05 验收记录已在当前树 |
+| `CONTEXT.md`、`docs/adr/` | 项目术语与已接受的架构决策 | 已存在；记录 LocalStateRoot、DaemonReadiness 等语义及本机 Daemon 控制边界，不表示 M1 已实现 |
 | `cmd/`、`configs/` | `cmd/keystone`、`cmd/keystone-daemon`、`cmd/keystone-worker` 与 `configs` 的 `.gitkeep` | 预留入口，无运行实现 |
 | `internal/infrastructure/` | `config`、`logging`、`id`、`localstate`、`migration` 五个 Go package，各自含源码、测试和局部文档 | 已有基础能力；`localstate` 与 `migration` 落地 Ticket 02 的本机状态和 SQLite 元数据基线 |
 | `contracts/controlplane/` | `/v1` 版本前缀、错误 envelope、健康 DTO、`Idempotency-Key` 表达 | 已落地独立 JSON Contract package，无 HTTP Handler |
@@ -148,6 +150,7 @@ Daemon → contracts/worker → Worker
 | 用例编排 | 对应 `internal/<area>/` Application 区域 | L3 Application |
 | 持久化或外部适配 | `internal/infrastructure/` | L5 Infrastructure、`migrations/` |
 | Ticket 02 实现 | `docs/FE20260903080401/tickets/02-local-state-and-boundary-contracts/` | spec、子 Ticket、localstate/migration/Contract 实现与验收记录 |
+| 运行术语与长期决策 | `CONTEXT.md`、`docs/adr/` | 术语消歧与已接受的本机 Daemon 控制边界 |
 
 规则、修改前阅读顺序和验证要求见 `AGENTS.md`；本表只提供定位关系。
 
@@ -156,6 +159,7 @@ Daemon → contracts/worker → Worker
 - 当前树与路径：`find . -path './.git' -prune -o -print`、`rg --files -uu`。
 - 模块声明：`go.mod`。
 - 当前规约来源：`AGENTS.md`。
+- 运行术语与已接受决策：`CONTEXT.md`、`docs/adr/0001-local-daemon-control-plane.md`。
 - Ticket 02 规格：`docs/FE20260903080401/tickets/02-local-state-and-boundary-contracts/spec/02-local-state-and-boundary-contracts-spec.md` 及其父 Ticket/子 Ticket。
 - Graphify 输出、CodeMap 输出和 MCP 代码地图：当前未发现。
 - 当前已有七个可编译、可测试的 Go package：`contracts/controlplane`、`contracts/worker`、`internal/infrastructure/config`、`internal/infrastructure/logging`、`internal/infrastructure/id`、`internal/infrastructure/localstate` 和 `internal/infrastructure/migration`。
@@ -164,5 +168,6 @@ Daemon → contracts/worker → Worker
 
 - 生成日期：`2026-09-04`。
 - Graphify 输出、CodeMap 输出和 MCP 代码地图：当前未发现。
+- `CONTEXT.md` 与 `docs/adr/0001-local-daemon-control-plane.md` 已记录 Ticket 03 对齐结论；它们不改变 Daemon、HTTP API 或 CLI 尚未实现的事实。
 - `Makefile` 提供根级验证入口；`dashboard/`、`contracts/{controlplane,worker}/` 与 `internal/infrastructure/{config,logging,id,localstate,migration}/` 已落地。`migrations/`、`scripts/`、Daemon、Worker runtime 和 HTTP API 尚未创建。
 - 新增实现、创建目标目录或刷新架构 / 代码地图后，本索引需要重新对齐。
