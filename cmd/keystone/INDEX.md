@@ -2,7 +2,7 @@
 
 ## 当前状态
 
-该 package 已提供真实的 `keystone daemon start|status|stop` CLI。命令使用
+该 package 已提供真实的 `keystone init` 和 `keystone daemon start|status|stop` CLI。命令使用
 归一化的 `LocalStateRoot` 读取 RuntimeMetadata，并只经
 `contracts/controlplane` 的 HTTP/JSON 边界访问 Daemon；CLI 不访问 SQLite。
 
@@ -15,6 +15,7 @@
 | `metadata.go` | 只读 RuntimeMetadata 与 loopback endpoint 校验 |
 | `http_client.go` | Control Plane health/status/stop 的 JSON client |
 | `process.go` | `keystone-daemon` 发现、启动和 readiness 轮询 |
+| `errors.go` | CLI 错误分类 |
 | `command_test.go` | 命令树、生命周期分支和依赖注入测试 |
 | `AGENTS.md` | 本 package 的职责与验证规约 |
 
@@ -23,11 +24,13 @@
 ```text
 keystone CLI
 ├── contracts/controlplane
-└── internal/infrastructure/localstate（仅 Resolve、Paths、Metadata）
+├── internal/infrastructure/localstate（Resolve、Paths、Metadata）
+└── internal/infrastructure/id（CLI 生成 Idempotency-Key）
 ```
 
-`start` 启动同目录或 PATH 中的 `keystone-daemon`，并传入归一化的
-`LocalStateRoot`；`status` 和 `stop` 只读取 metadata 并发起 HTTP 请求。
+`start` 和 `init` 复用同目录或 PATH 中的 `keystone-daemon` ensure seam，并传入
+归一化的 `LocalStateRoot`；`init` 只提交当前目录的绝对路径，`status` 和 `stop`
+只读取 metadata 并发起 HTTP 请求。
 
 ## 验证入口
 

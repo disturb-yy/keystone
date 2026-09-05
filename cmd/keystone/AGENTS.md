@@ -8,6 +8,8 @@
 - 读取 `RuntimeMetadata` 发现 loopback endpoint；
 - 通过 `contracts/controlplane` 的 HTTP/JSON DTO 查询健康、状态和停止结果；
 - 在 `start` 中发现并启动独立的 `keystone-daemon`，在有界时间内确认 readiness。
+- 在 `init` 中归一化当前目录、复用 Daemon ensure seam，并通过 loopback API
+  提交 Project 初始化；CLI 不读取 Manifest 或 SQLite。
 
 该 package 不打开 SQLite、不获取或判断 `InstanceLock`、不按 PID 控制进程，
 也不实现 Daemon HTTP Handler。`status` 与 `stop` 不得启动子进程；只有

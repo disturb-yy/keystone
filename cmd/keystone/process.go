@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/disturb-yy/keystone/contracts/controlplane"
+	"github.com/disturb-yy/keystone/internal/infrastructure/localstate"
 )
 
 func defaultCommandRunner(ctx context.Context, executable string, args ...string) (DaemonProcess, error) {
@@ -52,37 +53,50 @@ func discoverDaemonExecutable(deps Dependencies) (string, error) {
 }
 
 func (c *cli) start(ctx context.Context, out io.Writer) error {
-	metadata, initialErr := readRuntimeMetadata(c.paths)
-	if initialErr == nil {
-		status, err := c.verifyReady(ctx, metadata)
-		if err == nil {
-			return writeJSONOutput(out, status)
-		}
-		initialErr = err
-	}
-
-	executable, err := discoverDaemonExecutable(c.deps)
+	metadata, err := c.ensureDaemon(ctx)
 	if err != nil {
 		return err
 	}
-	return c.launchAndWait(ctx, out, executable, initialErr)
-}
-
-func (c *cli) launchAndWait(ctx context.Context, out io.Writer, executable string, initialErr error) error {
-	process, err := c.deps.CommandRunner(ctx, executable, "--data-dir", c.paths.Root)
-	if err != nil {
-		return newCLIError(ErrorDaemonStartFailed, "启动 keystone-daemon 子进程失败", err)
-	}
-	if process == nil {
-		return newCLIError(ErrorDaemonStartFailed, "启动 keystone-daemon 未返回进程句柄", nil)
-	}
-	readyContext, cancelReady := context.WithTimeout(ctx, c.deps.StartTimeout)
-	defer cancelReady()
-	status, err := c.waitUntilReady(readyContext, process, initialErr)
+	status, err := c.verifyReady(ctx, metadata)
 	if err != nil {
 		return err
 	}
 	return writeJSONOutput(out, status)
+}
+
+func (c *cli) ensureDaemon(ctx context.Context) (localstate.Metadata, error) {
+	metadata, initialErr := readRuntimeMetadata(c.paths)
+	if initialErr == nil {
+		if _, err := c.verifyReady(ctx, metadata); err == nil {
+			return metadata, nil
+		} else {
+			initialErr = err
+		}
+	}
+	executable, err := discoverDaemonExecutable(c.deps)
+	if err != nil {
+		return localstate.Metadata{}, err
+	}
+	process, err := c.deps.CommandRunner(ctx, executable, "--data-dir", c.paths.Root)
+	if err != nil {
+		return localstate.Metadata{}, newCLIError(ErrorDaemonStartFailed, "启动 keystone-daemon 子进程失败", err)
+	}
+	if process == nil {
+		return localstate.Metadata{}, newCLIError(ErrorDaemonStartFailed, "启动 keystone-daemon 未返回进程句柄", nil)
+	}
+	readyContext, cancelReady := context.WithTimeout(ctx, c.deps.StartTimeout)
+	defer cancelReady()
+	if _, err := c.waitUntilReady(readyContext, process, initialErr); err != nil {
+		return localstate.Metadata{}, err
+	}
+	metadata, err = readRuntimeMetadata(c.paths)
+	if err != nil {
+		return localstate.Metadata{}, err
+	}
+	if _, err := c.verifyReady(ctx, metadata); err != nil {
+		return localstate.Metadata{}, err
+	}
+	return metadata, nil
 }
 
 func (c *cli) waitUntilReady(ctx context.Context, process DaemonProcess, initialErr error) (controlplane.DaemonStatusResponse, error) {

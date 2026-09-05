@@ -8,7 +8,7 @@ SQLite 行为；这些行为由 `internal/daemon` 负责。
 
 ## 文件
 
-- `contract.go`：版本前缀、错误 envelope、健康响应、Daemon status/stop DTO 和幂等键类型。
+- `contract.go`：版本前缀、错误 envelope、健康响应、Daemon status/stop、Project Init/Query/Event Query DTO 和幂等键类型。
 - `contract_test.go`：Health、Daemon status/stop、错误 envelope、幂等键的 JSON round-trip 和字段约束测试。
 - `AGENTS.md`：本 package 的职责、依赖和验证规约。
 
@@ -22,6 +22,9 @@ SQLite 行为；这些行为由 `internal/daemon` 负责。
 | `DaemonStopRequest` | `POST /v1/daemon/stop` 携带必需的 DaemonInstanceID |
 | `DaemonStopResponse` | 返回是否接受停止请求及接受请求的 DaemonInstanceID |
 | `IdempotencyKey` | 保留非空、不透明的 `Idempotency-Key` 值；当前 stop DTO 不要求该 Header |
+| `ProjectInitRequest` / `ProjectInitResponse` | `POST /v1/projects/init` 的强类型 Command 边界 |
+| `ProjectQueryResponse` | `GET /v1/projects/{project_id}` 的 Project 快照 |
+| `ProjectEventsResponse` | `GET /v1/projects/{project_id}/events` 的 ProjectInitialized 列表 |
 
 ## 关系
 
@@ -30,15 +33,15 @@ cmd/keystone → contracts/controlplane → internal/daemon HTTP Handler
 ```
 
 `dashboard/` 当前仍是前端骨架，没有已落地的业务 API 调用；它是该边界的
-目标客户端。`internal/daemon/server.go` 注册并实现 `/healthz`、
-`/v1/daemon/status` 和 `/v1/daemon/stop`，但不把 Handler 或 SQLite 代码放入
+目标客户端。`internal/daemon/` 注册并实现 `/healthz`、
+`/v1/daemon/status`、`/v1/daemon/stop`、`/v1/projects/init` 和 Project Query 路由，但不把 Handler 或 SQLite 代码放入
 本 package。
 
 ## 明确边界
 
 - 只依赖 Go 标准库，不引用 Domain、Application、Infrastructure、SQLite 或具体 Daemon 实现。
 - 不拥有 InstanceLock、RuntimeMetadata、SQLite 连接、Migration、readiness 或权威业务状态。
-- 不定义 Worker runtime、Project、Change、Ticket 或业务 Schema；`contracts/worker` 是独立的另一条传输边界。
+- 不定义 Worker runtime、Project Domain、Change、Ticket 或业务 Schema；Project DTO 只是本 package 的传输边界，`contracts/worker` 是独立的另一条传输边界。
 
 ## 验证入口
 

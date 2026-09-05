@@ -18,7 +18,11 @@ import (
 	"github.com/disturb-yy/keystone/contracts/controlplane"
 	"github.com/disturb-yy/keystone/internal/infrastructure/id"
 	"github.com/disturb-yy/keystone/internal/infrastructure/localstate"
+	"github.com/disturb-yy/keystone/internal/infrastructure/manifest"
 	"github.com/disturb-yy/keystone/internal/infrastructure/migration"
+	"github.com/disturb-yy/keystone/internal/infrastructure/repository"
+	"github.com/disturb-yy/keystone/internal/infrastructure/workstore"
+	"github.com/disturb-yy/keystone/internal/work"
 )
 
 const (
@@ -58,6 +62,7 @@ type Server struct {
 	endpoint   string
 	startedAt  string
 	readiness  bool
+	projects   *work.Service
 }
 
 // New 创建尚未运行的 Daemon 句柄。路径、目录、锁和监听器均在 Run 中按固定顺序创建。
@@ -225,13 +230,26 @@ func (s *Server) openAndMigrate(ctx context.Context) error {
 	s.db = db
 	s.mu.Unlock()
 
-	runner := migration.NewRunner(migration.DefaultMigrations())
+	migrations := migration.DefaultMigrations()
+	migrations = append(migrations, workstore.Migrations()...)
+	runner := migration.NewRunner(migrations)
 	if err := runner.Apply(ctx, db); err != nil {
 		return fmt.Errorf("apply daemon migrations: %w", err)
 	}
 	if _, err := readMigrationVersion(ctx, db); err != nil {
 		return fmt.Errorf("query daemon schema migration version: %w", err)
 	}
+	state, err := workstore.New(db)
+	if err != nil {
+		return fmt.Errorf("create project state adapter: %w", err)
+	}
+	projects, err := work.NewService(repository.Git{}, manifest.Store{}, state)
+	if err != nil {
+		return fmt.Errorf("create project application service: %w", err)
+	}
+	s.mu.Lock()
+	s.projects = projects
+	s.mu.Unlock()
 	return nil
 }
 
@@ -294,6 +312,7 @@ func (s *Server) shutdownResources() error {
 	s.httpServer = nil
 	s.listener = nil
 	s.db = nil
+	s.projects = nil
 	s.lock = nil
 	s.readiness = false
 	s.mu.Unlock()
@@ -340,6 +359,8 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("/healthz", s.handleHealth)
 	mux.HandleFunc("/v1/daemon/status", s.handleStatus)
 	mux.HandleFunc("/v1/daemon/stop", s.handleStop)
+	mux.HandleFunc("/v1/projects/init", s.handleProjectInit)
+	mux.HandleFunc("/v1/projects/", s.handleProjectRoute)
 	return mux
 }
 

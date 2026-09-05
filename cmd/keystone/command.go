@@ -15,6 +15,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/disturb-yy/keystone/contracts/controlplane"
+	"github.com/disturb-yy/keystone/internal/infrastructure/id"
 	"github.com/disturb-yy/keystone/internal/infrastructure/localstate"
 )
 
@@ -115,6 +116,9 @@ func NewRootCommand(deps Dependencies) *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
+	root.PersistentFlags().StringVar(&app.dataDir, "data-dir", "", "Keystone local state root")
+	root.PersistentPreRunE = app.prepare
+	root.AddCommand(app.newInitCommand())
 	daemon := app.newDaemonCommand()
 	root.AddCommand(daemon)
 	return root
@@ -128,8 +132,6 @@ func (c *cli) newDaemonCommand() *cobra.Command {
 			return cmd.Help()
 		},
 	}
-	daemon.PersistentFlags().StringVar(&c.dataDir, "data-dir", "", "Keystone local state root")
-	daemon.PersistentPreRunE = c.prepare
 	daemon.AddCommand(
 		&cobra.Command{
 			Use:   "start",
@@ -157,6 +159,17 @@ func (c *cli) newDaemonCommand() *cobra.Command {
 		},
 	)
 	return daemon
+}
+
+func (c *cli) newInitCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "init",
+		Short: "将当前 Git Repository 注册为 Project",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return c.init(cmd.Context(), cmd.OutOrStdout())
+		},
+	}
 }
 
 func (c *cli) prepare(_ *cobra.Command, _ []string) error {
@@ -224,6 +237,26 @@ func (c *cli) stop(ctx context.Context, out io.Writer) error {
 	}
 	if response.DaemonInstanceID != metadata.InstanceID {
 		return newCLIError(ErrorInstanceMismatch, "停止响应的 DaemonInstanceID 与 metadata 不一致", nil)
+	}
+	return writeJSONOutput(out, response)
+}
+
+func (c *cli) init(ctx context.Context, out io.Writer) error {
+	metadata, err := c.ensureDaemon(ctx)
+	if err != nil {
+		return err
+	}
+	workingDirectory, err := os.Getwd()
+	if err != nil {
+		return newCLIError(ErrorInvalidResponse, "读取当前目录失败", err)
+	}
+	workingDirectory, err = filepath.Abs(filepath.Clean(workingDirectory))
+	if err != nil {
+		return newCLIError(ErrorInvalidResponse, "归一化当前目录失败", err)
+	}
+	response, err := c.client().init(ctx, metadata.Endpoint, id.New(), controlplane.ProjectInitRequest{RepositoryPath: workingDirectory})
+	if err != nil {
+		return err
 	}
 	return writeJSONOutput(out, response)
 }

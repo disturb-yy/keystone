@@ -1,7 +1,10 @@
 // Package controlplane 定义 Client 与 Control Plane Daemon 之间的传输契约。
 package controlplane
 
-import "errors"
+import (
+	"errors"
+	"strings"
+)
 
 const (
 	// VersionPrefix 是 Control Plane API 的稳定版本前缀。
@@ -57,6 +60,42 @@ type DaemonStopResponse struct {
 	DaemonInstanceID string `json:"daemon_instance_id"`
 }
 
+// ProjectInitRequest 是 Project 初始化 Command 的请求体。
+type ProjectInitRequest struct {
+	RepositoryPath string `json:"repository_path"`
+}
+
+// ProjectDTO 是 Control Plane 返回的 Project 快照。
+type ProjectDTO struct {
+	ProjectID      string `json:"project_id"`
+	RepositoryRoot string `json:"repository_root"`
+	ManifestPath   string `json:"manifest_path"`
+	CreatedAt      string `json:"created_at"`
+}
+
+// ProjectInitResponse 是 Project 初始化成功响应。
+type ProjectInitResponse struct {
+	Project ProjectDTO `json:"project"`
+}
+
+// ProjectQueryResponse 是 Project Query 成功响应。
+type ProjectQueryResponse struct {
+	Project ProjectDTO `json:"project"`
+}
+
+// ProjectEventDTO 是 ProjectInitialized 的最小查询边界。
+type ProjectEventDTO struct {
+	EventID    string `json:"event_id"`
+	ProjectID  string `json:"project_id"`
+	Type       string `json:"type"`
+	OccurredAt string `json:"occurred_at"`
+}
+
+// ProjectEventsResponse 是 Project Event Query 成功响应。
+type ProjectEventsResponse struct {
+	Events []ProjectEventDTO `json:"events"`
+}
+
 // ErrEmptyIdempotencyKey 表示幂等键为空。
 var ErrEmptyIdempotencyKey = errors.New("idempotency key must not be empty")
 
@@ -78,10 +117,31 @@ func ParseIdempotencyKey(value string) (IdempotencyKey, error) {
 
 // Validate 检查幂等键是否存在，不对不透明值施加格式约束。
 func (key IdempotencyKey) Validate() error {
-	if key == "" {
+	if strings.TrimSpace(string(key)) == "" {
 		return ErrEmptyIdempotencyKey
 	}
 
+	return nil
+}
+
+// ValidateProjectID 检查小写 canonical UUIDv7 的 HTTP 路径表达。
+func ValidateProjectID(value string) error {
+	if len(value) != 36 || value != strings.ToLower(value) ||
+		value[8] != '-' || value[13] != '-' || value[18] != '-' || value[23] != '-' ||
+		value[14] != '7' {
+		return errors.New("project_id must be a lowercase canonical UUIDv7")
+	}
+	for index, char := range value {
+		if index == 8 || index == 13 || index == 18 || index == 23 {
+			continue
+		}
+		if !strings.ContainsRune("0123456789abcdef", char) {
+			return errors.New("project_id must be a lowercase canonical UUIDv7")
+		}
+	}
+	if value[19] < '8' || value[19] > 'b' {
+		return errors.New("project_id must use RFC 9562 variant bits")
+	}
 	return nil
 }
 
