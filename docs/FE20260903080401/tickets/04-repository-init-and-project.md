@@ -3,6 +3,7 @@
 - 里程碑：M2
 - `BLOCKED_BY`：03
 - 交付类型：Project 纵切
+- 当前状态：规格与本地子 Ticket 已对齐；仍受顶层 Ticket 03 验收阻塞，尚未实现
 
 ## 目标
 
@@ -11,7 +12,7 @@
 ## 范围
 
 - 在 `internal/work` 中实现 Project 的 Domain 语义、Repository Port 和 Application 用例；业务强边界放在 `internal/work/domain`。
-- 实现 Git root 解析、干净 Repository 身份识别和 `.keystone/project.yaml` 的创建或 reconcile。
+- 实现 Git root 解析、规范化的 Repository 身份识别和 `.keystone/project.yaml` 的创建或 reconcile。
 - 实现 Project SQLite Adapter、Control Plane Project Command/Query DTO、HTTP Adapter 和 CLI `init`。
 - 将 Project 写入 SQLite，并在同一事务中记录 `ProjectInitialized` Domain Event。
 - 使用 idempotency key 避免重复 init 产生重复权威 Project。
@@ -19,7 +20,7 @@
 ## 不包含
 
 - Change 创建、Worktree、Runtime 或 Repository 全量分析。
-- 让 Client 直接写 Manifest 以外的 Control Plane 状态。
+- 让 Client 直接写 ProjectManifest 或任何 Control Plane 状态。
 - 将 SQLite、Git CLI 或 HTTP 细节放入 Domain。
 
 ## 验收条件

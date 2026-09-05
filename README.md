@@ -7,6 +7,7 @@
 - `docs/FE20260903080401/`：保存 V1 实施基线、里程碑、验收清单和版本化 Ticket/规格文档。
 - `CONTEXT.md` 与 `docs/adr/`：保存已确认的领域/运行术语和难以逆转的架构决策；它们不表示对应运行能力已经实现。
 - `docs/FE20260903080401/tickets/02-local-state-and-boundary-contracts/`：Ticket 02 的实施规格、子 Ticket 和验收记录。
+- `docs/FE20260903080401/tickets/04-repository-init-and-project/`：Ticket 04 的实施规格和四张本地子 Ticket，规划已对齐但仍受 Ticket 03 阻塞，未实现。
 - `internal/infrastructure/config`、`logging`、`id`：提供日志配置解析、JSON logger 和 UUIDv7 生成；`localstate` 提供本机数据根、目录、跨平台锁和诊断元数据；`migration` 提供纯 Go SQLite `t_schema_migrations` runner。
 - `contracts/controlplane`、`contracts/worker`：提供 `/v1` Control Plane 与 Worker 的最小 JSON 边界 DTO，不访问 Domain 或 SQLite。
 - `dashboard/`：已有 React、TypeScript、Vite 工程和 `package-lock.json`，仅为可构建骨架；`cmd/keystone`、`cmd/keystone-daemon`、`cmd/keystone-worker` 与 `configs` 保留 `.gitkeep` 预留事实。

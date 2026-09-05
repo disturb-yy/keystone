@@ -217,9 +217,10 @@ V1 不采用完整 Event Sourcing。
 `keystone init` 只做最小 Project Bootstrap：
 
 ```text
-Resolve Git Root
-→ 检查 Manifest
+Normalize invocation directory
 → ensure daemon
+→ Daemon resolves Git Root
+→ 检查 Manifest
 → register/reconcile Project
 → 写 .keystone/project.yaml
 → 验证 Manifest ↔ Local DB

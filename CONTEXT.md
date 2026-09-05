@@ -36,6 +36,94 @@ _避免_：Ticket ready、ready-for-agent、规划完成
 一个 LocalStateRoot 所属持久状态中，已成功提交的最高 Schema Migration 版本。
 _避免_：业务版本、应用版本、Ticket 版本
 
+## Project 初始化
+
+**Project**：
+由 Daemon 权威持有的长期工程范围。V1 中一个 Project 对应一个 RepositoryIdentity，并且同时至多有一个活动的 RepositoryBinding。
+_避免_：当前工作目录、DaemonInstance、单次 Change
+
+**ProjectID**：
+标识 Project 的稳定关联标识。V1 用它表达 RepositoryIdentity，而不从本机路径、远程地址或运行实例派生。
+_避免_：RepositoryBinding、DaemonInstanceID、LocalStateRoot
+
+**RepositoryIdentity**：
+将 Project 与其版本化项目知识稳定关联的身份。V1 中它由 ProjectID 表达，可跨本机目录移动保持一致，但不能同时关联两个活动的仓库根。
+_避免_：任意文件路径、远程地址、LocalStateRoot
+
+**RepositoryBinding**：
+一个 Project 当前关联的规范化、非 bare Git 主工作树根。子目录属于同一 Binding；子模块可作为独立 Project 的 Binding。
+_避免_：linked worktree、Workspace、RepositoryIdentity
+
+**ProjectManifest**：
+Repository 持有的版本化 ProjectIdentity 表达；它不拥有 Project 当前权威状态，也不承载本机运行状态。
+_避免_：Keystone DB、RuntimeMetadata、用户级状态目录
+
+**ProjectManifestVersion**：
+ProjectManifest 可被当前 Control Plane 解释的版本边界。不兼容或含义不明确的 Manifest 必须被拒绝，不能通过静默丢弃字段取得协调成功。
+_避免_：SchemaMigrationVersion、应用版本、自动修复标记
+
+**ProjectInitialization**：
+将 RepositoryBinding 注册或协调为 Project 的 Control Plane Command。语义相同的重复请求必须收敛到同一 Project，不能创建重复权威记录。
+_避免_：Change 创建、Repository 全量分析、Client 直写 Control Plane 状态
+
+**ProjectInitializationIntent**：
+Daemon 持有的可恢复初始化候选，保存尚未成为权威 Project 的 ProjectID 与 RepositoryBinding。它不是 Project，也不产生 ProjectInitialized。
+_避免_：Project、已完成回执、运行时日志
+
+**ProjectInitializationReceipt**：
+与一次带幂等键的 ProjectInitialization 关联的持久结果。成功回执可重放其结果；未完成意图继续协调，不能被当作成功回执。
+_避免_：ProjectInitialized、Client 缓存、DaemonInstanceID
+
+**ProjectInitialized**：
+Project 首次成为一个 LocalStateRoot 权威记录时追加的不可变领域事实。重试或只修复 ProjectManifest 的协调不产生新的 ProjectInitialized。
+_避免_：启动日志、Manifest 写入记录、Lifecycle 推进
+
+## Change 生命周期与审计
+
+**Change**：
+由 Daemon 权威持有、绑定一个 Project 与不可变 BaseRevision 的长期变更意图及其生命周期事实。
+_避免_：单次 AgentRun、Git Worktree、Client 本地草稿
+
+**BaseRevision**：
+在 Change 创建时确认并固定的源 Repository 版本快照；后续生命周期不得用当前 HEAD 覆盖它。
+_避免_：运行时 HEAD、候选提交、用户输入的 revision
+
+**ChangeSourceSnapshot**：
+创建 Change 时对干净 RepositoryBinding 作出的只读版本确认，由 BaseRevision 表达其固定版本。
+_避免_：Git Worktree、运行时工作目录、Client 传入的 revision
+
+**ChangeIntentArtifact**：
+首次创建 Change 时保存的不可变意图 Artifact，用于后续 Stage 的输入；它不是 ProjectInitializationIntent。
+_避免_：ProjectInitializationIntent、可编辑描述、运行日志
+
+**LifecycleStage**：
+Change 最近一个已确认、已持久化的生命周期检查点，按 Intent、Understand、Design、Plan、Ticketize、Execute、Verify、FinalVerify 的既定顺序前进。
+_避免_：当前进程状态、Client 可直接设置的字段、ChangeStatus
+
+**ChangeStatus**：
+决定 Change 是否允许继续协调的运行控制状态；V1 使用 active、paused、human_required、cancelled 与 integrate_ready，且 integrate_ready 只在 FinalVerify 成功后出现。
+_避免_：LifecycleStage、AgentRun outcome、Verify 结果
+
+**Artifact**：
+与 Change 生命周期有关、内容不可变且可完整性校验的持久化输入、输出或证据。
+_避免_：可编辑文档、临时内存值、Event payload
+
+**ArtifactRef**：
+将业务事实关联到一个 Artifact 的可查询引用，保留其定位、摘要与完整性标识而不复制内容。
+_避免_：Artifact 内容副本、可变文件路径、运行时日志流
+
+**DomainEvent**：
+在权威业务事实发生时追加的不可变审计记录；它解释状态如何到达当前值，但不以重放替代权威状态。
+_避免_：应用日志、Worker 自报、完整 Event Sourcing
+
+**EventSequence**：
+同一业务聚合内 DomainEvent 的单调发生顺序，用于可靠复盘而不依赖 UUID 或时间戳排序。
+_避免_：UUIDv7 顺序、全局因果顺序、日志行号
+
+**CommandReceipt**：
+与一个幂等键及其规范化 Command 绑定的持久化结果，使相同请求可重放而不同请求不能复用同一键。
+_避免_：Client 缓存、Event、一次性 HTTP 响应
+
 ## 工作流与端点
 
 **RunnableTicket**：
