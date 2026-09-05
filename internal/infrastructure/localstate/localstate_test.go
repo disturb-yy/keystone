@@ -11,6 +11,7 @@ import (
 func TestResolveIsDeterministicAndHasNoSideEffects(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	p, err := Resolve("")
 	if err != nil {
 		t.Fatalf("Resolve() error = %v", err)

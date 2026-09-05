@@ -1,0 +1,38 @@
+# `cmd/keystone` 项目索引
+
+## 当前状态
+
+该 package 已提供真实的 `keystone daemon start|status|stop` CLI。命令使用
+归一化的 `LocalStateRoot` 读取 RuntimeMetadata，并只经
+`contracts/controlplane` 的 HTTP/JSON 边界访问 Daemon；CLI 不访问 SQLite。
+
+## 文件
+
+| 文件 | 职责 |
+| --- | --- |
+| `main.go` | 组装默认依赖并执行 CLI |
+| `command.go` | Cobra 命令树、共同 `--data-dir` 输入和命令编排 |
+| `metadata.go` | 只读 RuntimeMetadata 与 loopback endpoint 校验 |
+| `http_client.go` | Control Plane health/status/stop 的 JSON client |
+| `process.go` | `keystone-daemon` 发现、启动和 readiness 轮询 |
+| `command_test.go` | 命令树、生命周期分支和依赖注入测试 |
+| `AGENTS.md` | 本 package 的职责与验证规约 |
+
+## 依赖关系
+
+```text
+keystone CLI
+├── contracts/controlplane
+└── internal/infrastructure/localstate（仅 Resolve、Paths、Metadata）
+```
+
+`start` 启动同目录或 PATH 中的 `keystone-daemon`，并传入归一化的
+`LocalStateRoot`；`status` 和 `stop` 只读取 metadata 并发起 HTTP 请求。
+
+## 验证入口
+
+```bash
+GOCACHE=/tmp/keystone-ticket-03-go-cache go test ./cmd/keystone -count=1
+GOCACHE=/tmp/keystone-ticket-03-go-cache go test ./... -count=1
+GOCACHE=/tmp/keystone-ticket-03-go-cache go vet ./...
+```

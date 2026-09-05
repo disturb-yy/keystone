@@ -2,15 +2,12 @@
 
 ## 当前 checkout
 
-- `go.mod`：声明模块 `github.com/disturb-yy/keystone` 和 Go `1.27`，并锁定 Ticket 02 所需的 `golang.org/x/sys` 与 `modernc.org/sqlite`；当前 Go package 均有聚焦测试。
-- `Makefile`：提供根级 `test`、`build`、`lint` 和 `dashboard-build` 验证入口；Dashboard 目标会在 `dashboard/` 中按锁文件执行 `npm ci`。
-- `docs/FE20260903080401/`：保存 V1 实施基线、里程碑、验收清单和版本化 Ticket/规格文档。
-- `CONTEXT.md` 与 `docs/adr/`：保存已确认的领域/运行术语和难以逆转的架构决策；它们不表示对应运行能力已经实现。
-- `docs/FE20260903080401/tickets/02-local-state-and-boundary-contracts/`：Ticket 02 的实施规格、子 Ticket 和验收记录。
-- `docs/FE20260903080401/tickets/04-repository-init-and-project/`：Ticket 04 的实施规格和四张本地子 Ticket，规划已对齐但仍受 Ticket 03 阻塞，未实现。
-- `internal/infrastructure/config`、`logging`、`id`：提供日志配置解析、JSON logger 和 UUIDv7 生成；`localstate` 提供本机数据根、目录、跨平台锁和诊断元数据；`migration` 提供纯 Go SQLite `t_schema_migrations` runner。
-- `contracts/controlplane`、`contracts/worker`：提供 `/v1` Control Plane 与 Worker 的最小 JSON 边界 DTO，不访问 Domain 或 SQLite。
-- `dashboard/`：已有 React、TypeScript、Vite 工程和 `package-lock.json`，仅为可构建骨架；`cmd/keystone`、`cmd/keystone-daemon`、`cmd/keystone-worker` 与 `configs` 保留 `.gitkeep` 预留事实。
-- 当前文件树已有 `.go`、Ticket 02 基础设施/Contract 源码及 Dashboard 前端源码，但没有 Daemon、Worker runtime、HTTP API、业务数据库 Schema 或业务迁移。根 Make 入口可验证当前 Go 工程与 Dashboard 工程。
+- `cmd/keystone` 已提供 `keystone daemon start|status|stop`。`start` 可启动或复用独立 `keystone-daemon`，`status` 和 `stop` 只操作既有实例；CLI 通过 `contracts/controlplane` 的 HTTP/JSON 边界工作，不直接访问 SQLite。
+- `cmd/keystone-daemon` 已提供独立进程入口，`internal/daemon` 已实现 loopback HTTP、单实例锁、SQLite 打开、Migration、RuntimeMetadata 和 readiness 生命周期。
+- 当前 Daemon 路由是 `GET /healthz`、`GET /v1/daemon/status` 和 `POST /v1/daemon/stop`。ready 前 health 返回 `503`/`{"ready":false}`，ready 后返回 `200`/`{"ready":true}`；status 通过 DTO 返回 DatabasePath、SchemaMigrationVersion、DaemonReadiness 和 DaemonInstanceID。
+- SQLite 仅使用 LocalStateRoot 下的 `state/keystone.db` 和 `t_schema_migrations` 元数据表；当前没有业务 Schema、业务 Repository 或根级 `migrations/`。
+- `internal/infrastructure/config`、`logging`、`id`、`localstate`、`migration` 提供基础能力；`contracts/controlplane` 和 `contracts/worker` 只提供传输 DTO；`dashboard/` 仍是无业务 API 的 React/TypeScript/Vite 骨架。
 
-目标架构和 Ticket 规格中的流程、名称和拓扑不构成当前服务行为或接口实现的证据；当前实现边界以源码、测试和 `INDEX.md` 的事实记录为准。
+当前明确未实现：Worker 进程/runtime、Project、Change、Ticket、业务 Domain/Application、业务状态持久化、业务 SQLite 表及 Dashboard 业务功能。目标架构和 Ticket 03 spec 只提供设计/规范输入，不构成额外运行行为证据。
+
+详细的当前路径、边界、证据和刷新条件见根 [`INDEX.md`](INDEX.md)；Ticket 03 spec 保持为只读规范输入。
