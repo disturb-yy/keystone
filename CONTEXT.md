@@ -101,16 +101,24 @@ Change 最近一个已确认、已持久化的生命周期检查点，按 Intent
 _避免_：当前进程状态、Client 可直接设置的字段、ChangeStatus
 
 **ChangeStatus**：
-决定 Change 是否允许继续协调的运行控制状态；V1 使用 active、paused、human_required、cancelled 与 integrate_ready，且 integrate_ready 只在 FinalVerify 成功后出现。
+决定 Change 是否允许继续协调的运行控制状态；V1 使用 active、paused、human_required、cancelled 与 integrate_ready，且可重试 Stage 失败进入 human_required，integrate_ready 只在 FinalVerify 成功后出现。
 _避免_：LifecycleStage、AgentRun outcome、Verify 结果
 
 **Artifact**：
-与 Change 生命周期有关、内容不可变且可完整性校验的持久化输入、输出或证据。
+与 Change 生命周期有关、内容不可变且可完整性校验的持久化输入、输出或证据；同一内容可以被多个 ArtifactRef 关联。
 _避免_：可编辑文档、临时内存值、Event payload
 
 **ArtifactRef**：
-将业务事实关联到一个 Artifact 的可查询引用，保留其定位、摘要与完整性标识而不复制内容。
+将一个业务事实独立关联到 Artifact 的可查询引用，保留其定位、摘要与完整性标识而不复制内容。
 _避免_：Artifact 内容副本、可变文件路径、运行时日志流
+
+**ArtifactSummary**：
+用于在本机查询中识别 Artifact 的受长度限制预览；它不能替代原始内容，也不承载任意 Runtime 输出摘录。
+_避免_：完整 Artifact、Event payload、错误文本
+
+**ArtifactKind**：
+Artifact 在生命周期中的语义类别；M3 仅产生 change_intent，后续类别由拥有相应 Stage 的 Ticket 增加。
+_避免_：文件扩展名、MIME type、LifecycleStage
 
 **DomainEvent**：
 在权威业务事实发生时追加的不可变审计记录；它解释状态如何到达当前值，但不以重放替代权威状态。
@@ -123,6 +131,18 @@ _避免_：UUIDv7 顺序、全局因果顺序、日志行号
 **CommandReceipt**：
 与一个幂等键及其规范化 Command 绑定的持久化结果，使相同请求可重放而不同请求不能复用同一键。
 _避免_：Client 缓存、Event、一次性 HTTP 响应
+
+**AgentRun**：
+为一个 LifecycleStage 创建的单次不可变执行尝试；Retry 必须创建新的 AgentRun，不能改写既有尝试或 Change 的已确认检查点。
+_避免_：Change、Worker、可复用任务槽
+
+**HumanDecision**：
+对 human_required Change 追加的人工恢复事实；Daemon 解释其合法动作，Client 不直接指定 LifecycleStage 或 ChangeStatus。
+_避免_：状态字段覆盖、可编辑备注、Worker Report
+
+**Actor**：
+Command、Decision 或 DomainEvent 的来源归属。M3 仅用 human:local 与 daemon:local 表示本机来源，不能将它解释为已验证身份或授权主体。
+_避免_：访问令牌、RBAC Principal、状态权威
 
 ## 工作流与端点
 

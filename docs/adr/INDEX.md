@@ -20,3 +20,4 @@
 | [0006](./0006-artifact-reference-recovery-order.md) | Artifact 与权威引用的恢复顺序 | 已接受 |
 | [0007](./0007-domain-event-audit-ledger.md) | 追加式 Domain Event 审计账本 | 已接受 |
 | [0008](./0008-change-creation-source-snapshot.md) | Change 创建时固定干净源快照 | 已接受 |
+| [0009](./0009-failure-recovery-requires-human-decision.md) | 失败恢复要求人工 Decision | 已接受 |
