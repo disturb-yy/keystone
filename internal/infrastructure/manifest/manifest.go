@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 
 	"github.com/disturb-yy/keystone/internal/work/domain"
 )
@@ -28,6 +29,8 @@ type openManifestFile func(string, int, os.FileMode) (manifestFile, error)
 type Store struct {
 	openFile openManifestFile
 }
+
+var temporaryManifestSequence uint64
 
 // Ensure 严格读取现有 Manifest，或使用 candidate 创建缺失 Manifest。
 func (s Store) Ensure(ctx context.Context, binding domain.RepositoryBinding, candidate domain.ProjectID) (domain.ProjectManifest, error) {
@@ -83,22 +86,18 @@ func (s Store) readOrCreate(ctx context.Context, path string, candidate domain.P
 		return nil, fmt.Errorf("create project manifest: %w", err)
 	}
 	data = []byte(fmt.Sprintf(manifestContent, candidate))
-	file, err := s.open(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0644)
+	file, temporaryPath, err := s.createTemporaryFile(filepath.Dir(path))
 	if err != nil {
-		if errors.Is(err, os.ErrExist) {
-			return s.readOrCreate(ctx, path, candidate)
-		}
 		return nil, fmt.Errorf("create project manifest: %w", domain.ErrManifestUnavailable)
 	}
 	closed := false
-	verified := false
 	defer func() {
 		if !closed {
 			_ = file.Close()
 		}
-		if !verified {
-			if removeErr := os.Remove(path); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
-				err = errors.Join(err, fmt.Errorf("remove incomplete project manifest: %w", removeErr))
+		if temporaryPath != "" {
+			if removeErr := os.Remove(temporaryPath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+				err = errors.Join(err, fmt.Errorf("remove temporary project manifest: %w", removeErr))
 			}
 		}
 	}()
@@ -114,22 +113,40 @@ func (s Store) readOrCreate(ctx context.Context, path string, candidate domain.P
 	closeErr := file.Close()
 	closed = true
 	if closeErr != nil {
-		closed = true
 		return nil, fmt.Errorf("close project manifest: %w", errors.Join(domain.ErrManifestUnavailable, closeErr))
 	}
-	verifiedData, verifyErr := readExisting(path, nil)
-	if verifyErr != nil {
-		return nil, verifyErr
+	if err := os.Link(temporaryPath, path); err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return readExisting(path, nil)
+		}
+		return nil, fmt.Errorf("publish project manifest: %w", errors.Join(domain.ErrManifestUnavailable, err))
 	}
-	verified = true
-	return verifiedData, nil
+	if err := os.Remove(temporaryPath); err != nil {
+		return nil, fmt.Errorf("remove temporary project manifest: %w", errors.Join(domain.ErrManifestUnavailable, err))
+	}
+	temporaryPath = ""
+	return readExisting(path, nil)
 }
 
-func (s Store) open(path string, flags int, mode os.FileMode) (manifestFile, error) {
-	if s.openFile != nil {
-		return s.openFile(path, flags, mode)
+func (s Store) createTemporaryFile(dir string) (manifestFile, string, error) {
+	openFile := s.openFile
+	if openFile == nil {
+		openFile = func(path string, flags int, mode os.FileMode) (manifestFile, error) {
+			return os.OpenFile(path, flags, mode)
+		}
 	}
-	return os.OpenFile(path, flags, mode)
+	for range 100 {
+		sequence := atomic.AddUint64(&temporaryManifestSequence, 1)
+		path := filepath.Join(dir, fmt.Sprintf(".project.yaml.tmp-%d-%d", os.Getpid(), sequence))
+		file, err := openFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0644)
+		if err == nil {
+			return file, path, nil
+		}
+		if !errors.Is(err, os.ErrExist) {
+			return nil, "", err
+		}
+	}
+	return nil, "", fmt.Errorf("allocate temporary project manifest: %w", os.ErrExist)
 }
 
 func readExisting(path string, info os.FileInfo) ([]byte, error) {

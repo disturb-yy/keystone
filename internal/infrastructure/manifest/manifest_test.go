@@ -6,7 +6,9 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/disturb-yy/keystone/internal/work/domain"
 )
@@ -111,6 +113,21 @@ func TestEnsureAcceptsCRLFManifestWithoutRewritingIt(t *testing.T) {
 	}
 }
 
+func TestEnsureRejectsNonRFCVariantUUIDv7Manifest(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, ".keystone", "project.yaml")
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("version: 1\nproject_id: 0191a6c0-0000-7000-c000-000000000000\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := (Store{}).Ensure(context.Background(), domain.RepositoryBinding{Root: root, ManifestPath: path}, domain.NewProjectID())
+	if !errors.Is(err, domain.ErrManifestInvalid) {
+		t.Fatalf("Ensure() error = %v, want ErrManifestInvalid", err)
+	}
+}
+
 func TestEnsureCleansIncompleteCreatedFileAndRetryCanRecover(t *testing.T) {
 	root := t.TempDir()
 	binding := domain.RepositoryBinding{Root: root, ManifestPath: filepath.Join(root, ".keystone", "project.yaml")}
@@ -136,6 +153,55 @@ func TestEnsureCleansIncompleteCreatedFileAndRetryCanRecover(t *testing.T) {
 	}
 }
 
+func TestEnsureConcurrentCreationPublishesCompleteManifest(t *testing.T) {
+	root := t.TempDir()
+	binding := domain.RepositoryBinding{Root: root, ManifestPath: filepath.Join(root, ".keystone", "project.yaml")}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var blockOnce sync.Once
+	var releaseOnce sync.Once
+	openFile := func(path string, flags int, mode os.FileMode) (manifestFile, error) {
+		file, err := os.OpenFile(path, flags, mode)
+		if err != nil {
+			return nil, err
+		}
+		block := false
+		blockOnce.Do(func() { block = true })
+		return &blockingWriteFile{file: file, block: block, started: started, release: release}, nil
+	}
+	store := Store{openFile: openFile}
+	first := make(chan error, 1)
+	go func() {
+		_, err := store.Ensure(context.Background(), binding, domain.NewProjectID())
+		first <- err
+	}()
+	<-started
+	second := make(chan error, 1)
+	go func() {
+		_, err := store.Ensure(context.Background(), binding, domain.NewProjectID())
+		second <- err
+	}()
+	select {
+	case err := <-second:
+		if err != nil {
+			t.Fatalf("concurrent Ensure() error = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("concurrent Ensure() did not publish a complete manifest")
+	}
+	releaseOnce.Do(func() { close(release) })
+	if err := <-first; err != nil {
+		t.Fatalf("first Ensure() error = %v", err)
+	}
+	data, err := os.ReadFile(binding.ManifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := parse(data); err != nil {
+		t.Fatalf("published manifest parse error = %v", err)
+	}
+}
+
 type shortWriteFile struct {
 	file *os.File
 }
@@ -143,3 +209,21 @@ type shortWriteFile struct {
 func (f shortWriteFile) Write([]byte) (int, error) { return 0, io.ErrShortWrite }
 func (f shortWriteFile) Sync() error               { return f.file.Sync() }
 func (f shortWriteFile) Close() error              { return f.file.Close() }
+
+type blockingWriteFile struct {
+	file    *os.File
+	block   bool
+	started chan struct{}
+	release chan struct{}
+}
+
+func (f *blockingWriteFile) Write(data []byte) (int, error) {
+	if f.block {
+		close(f.started)
+		<-f.release
+	}
+	return f.file.Write(data)
+}
+
+func (f *blockingWriteFile) Sync() error  { return f.file.Sync() }
+func (f *blockingWriteFile) Close() error { return f.file.Close() }

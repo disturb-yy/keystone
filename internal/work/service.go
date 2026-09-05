@@ -32,9 +32,9 @@ type Reservation struct {
 type StatePort interface {
 	Reserve(context.Context, string, string, domain.ProjectID) (Reservation, error)
 	AdoptIntentProjectID(context.Context, string, domain.ProjectID) error
-	FailIntent(context.Context, string, string) error
+	FailIntent(context.Context, domain.ProjectInitializationIntent, string, string) error
 	FindProject(context.Context, domain.ProjectID) (*domain.Project, error)
-	Finalize(context.Context, string, domain.ProjectInitializationIntent, domain.ProjectManifest, domain.RepositoryBinding, bool) (domain.Project, error)
+	Finalize(context.Context, string, domain.ProjectInitializationIntent, domain.ProjectManifest, domain.RepositoryBinding, string) (domain.Project, error)
 	ListEvents(context.Context, domain.ProjectID) ([]domain.ProjectInitialized, error)
 }
 
@@ -81,7 +81,7 @@ func (s *Service) Initialize(ctx context.Context, request InitializeRequest) (do
 	}
 	manifest, err := s.manifest.Ensure(ctx, binding, reservation.Intent.ProjectID)
 	if err != nil {
-		return domain.Project{}, s.handleManifestFailure(ctx, reservation.Intent.ID, err)
+		return domain.Project{}, s.handleManifestFailure(ctx, reservation.Intent, request.IdempotencyKey, err)
 	}
 	if manifest.ProjectID != reservation.Intent.ProjectID {
 		if err := s.state.AdoptIntentProjectID(ctx, reservation.Intent.ID, manifest.ProjectID); err != nil {
@@ -89,50 +89,59 @@ func (s *Service) Initialize(ctx context.Context, request InitializeRequest) (do
 		}
 		reservation.Intent.ProjectID = manifest.ProjectID
 	}
-	allowRebind, err := s.allowRebind(ctx, manifest.ProjectID, binding.Root)
+	rebindFrom, err := s.allowRebind(ctx, manifest.ProjectID, binding.Root)
 	if err != nil {
-		return domain.Project{}, s.failDeterministic(ctx, reservation.Intent.ID, err)
+		return domain.Project{}, s.failDeterministic(ctx, reservation.Intent, request.IdempotencyKey, err)
 	}
-	project, err := s.state.Finalize(ctx, request.IdempotencyKey, reservation.Intent, manifest, binding, allowRebind)
+	project, err := s.state.Finalize(ctx, request.IdempotencyKey, reservation.Intent, manifest, binding, rebindFrom)
 	if err != nil {
-		return domain.Project{}, s.failDeterministic(ctx, reservation.Intent.ID, err)
+		return domain.Project{}, s.failDeterministic(ctx, reservation.Intent, request.IdempotencyKey, err)
 	}
 	return project, nil
 }
 
-func (s *Service) handleManifestFailure(ctx context.Context, intentID string, err error) error {
+func (s *Service) handleManifestFailure(ctx context.Context, intent domain.ProjectInitializationIntent, key string, err error) error {
 	if errors.Is(err, domain.ErrManifestInvalid) {
-		return s.failDeterministic(ctx, intentID, err)
+		return s.failDeterministic(ctx, intent, key, err)
 	}
 	return fmt.Errorf("ensure project manifest: %w", err)
 }
 
-func (s *Service) failDeterministic(ctx context.Context, intentID string, err error) error {
-	if markErr := s.state.FailIntent(ctx, intentID, codeFor(err)); markErr != nil {
+func (s *Service) failDeterministic(ctx context.Context, intent domain.ProjectInitializationIntent, key string, err error) error {
+	if !isDeterministicFailure(err) {
+		return err
+	}
+	if markErr := s.state.FailIntent(ctx, intent, key, codeFor(err)); markErr != nil {
 		return errors.Join(err, fmt.Errorf("record project initialization failure: %w", markErr))
 	}
 	return err
 }
 
-func (s *Service) allowRebind(ctx context.Context, projectID domain.ProjectID, root string) (bool, error) {
+func (s *Service) allowRebind(ctx context.Context, projectID domain.ProjectID, root string) (string, error) {
 	project, err := s.state.FindProject(ctx, projectID)
 	if errors.Is(err, domain.ErrProjectNotFound) {
-		return false, nil
+		return "", nil
 	}
 	if err != nil {
-		return false, err
+		return "", err
 	}
 	if project.Binding.Root == root {
-		return false, nil
+		return "", nil
 	}
 	exists, err := s.repository.RootExists(ctx, project.Binding.Root)
 	if err != nil {
-		return false, fmt.Errorf("verify previous repository binding: %w", err)
+		return "", fmt.Errorf("verify previous repository binding: %w", err)
 	}
 	if exists {
-		return false, fmt.Errorf("%w: another active repository root exists", domain.ErrProjectIdentityConflict)
+		return "", fmt.Errorf("%w: another active repository root exists", domain.ErrProjectIdentityConflict)
 	}
-	return true, nil
+	return project.Binding.Root, nil
+}
+
+func isDeterministicFailure(err error) bool {
+	return errors.Is(err, domain.ErrManifestInvalid) ||
+		errors.Is(err, domain.ErrIdempotencyConflict) ||
+		errors.Is(err, domain.ErrProjectIdentityConflict)
 }
 
 // GetProject 查询当前 LocalStateRoot 内的权威 Project。

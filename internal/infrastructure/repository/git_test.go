@@ -35,6 +35,20 @@ func TestDiscoverBareRepositoryIsUnsupported(t *testing.T) {
 	}
 }
 
+func TestRootExistsRejectsExistingFileAsPreviousRoot(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "not-a-repository")
+	if err := os.WriteFile(path, []byte("file"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	exists, err := (Git{}).RootExists(context.Background(), path)
+	if exists {
+		t.Fatal("RootExists() reported a file as an existing repository root")
+	}
+	if !errors.Is(err, domain.ErrProjectIdentityConflict) {
+		t.Fatalf("RootExists() error = %v, want ErrProjectIdentityConflict", err)
+	}
+}
+
 func runGit(t *testing.T, dir string, args ...string) {
 	t.Helper()
 	command := exec.Command("git", append([]string{"-C", dir}, args...)...)

@@ -6,7 +6,7 @@
 
 | 文件 | 职责 |
 | --- | --- |
-| `service.go` | Project 初始化、恢复、rebind 和查询用例 |
+| `service.go` | Project 初始化、可恢复/确定性失败回放、旧 root 检查、rebind 和查询用例 |
 | `AGENTS.md` | Application 层局部规约 |
 | `INDEX.md` | 当前文件和依赖地图 |
 

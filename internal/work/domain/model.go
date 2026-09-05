@@ -31,7 +31,7 @@ func NewProjectID() ProjectID {
 // Validate 检查 ProjectID 的 V1 表达。
 func (id ProjectID) Validate() error {
 	parsed, err := uuid.Parse(string(id))
-	if err != nil || parsed.Version() != 7 || parsed.String() != string(id) {
+	if err != nil || parsed.Version() != 7 || parsed.Variant() != uuid.RFC4122 || parsed.String() != string(id) {
 		return fmt.Errorf("%w: project_id must be lowercase canonical UUIDv7", ErrManifestInvalid)
 	}
 	return nil

@@ -164,16 +164,47 @@ func (s *Store) AdoptIntentProjectID(ctx context.Context, intentID string, proje
 }
 
 // FailIntent 持久化确定性失败并释放 pending root claim。
-func (s *Store) FailIntent(ctx context.Context, intentID, code string) error {
-	result, err := s.db.ExecContext(ctx, `UPDATE t_project_initialization_intents SET status = 'failed', failure_code = ?, updated_at = ? WHERE intent_id = ? AND status = 'pending'`, code, s.now().UTC().Format(time.RFC3339Nano), intentID)
+func (s *Store) FailIntent(ctx context.Context, intent domain.ProjectInitializationIntent, key, code string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin failed project initialization: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+	current, err := readIntentByID(ctx, tx, intent.ID)
+	if err != nil {
+		return err
+	}
+	if current == nil || current.Status != domain.IntentPending {
+		return fmt.Errorf("fail project initialization intent: %w", domain.ErrInternal)
+	}
+	keys := []string{current.IdempotencyKey}
+	if key != current.IdempotencyKey {
+		keys = append(keys, key)
+	}
+	stamp := s.now().UTC().Format(time.RFC3339Nano)
+	for _, receiptKey := range keys {
+		if err := s.writeFailureReceipt(ctx, tx, receiptKey, current.RepositoryRoot, current.ProjectID, code, stamp); err != nil {
+			return err
+		}
+	}
+	result, err := tx.ExecContext(ctx, `UPDATE t_project_initialization_intents SET status = 'failed', failure_code = ?, updated_at = ? WHERE intent_id = ? AND status = 'pending'`, code, stamp, intent.ID)
 	if err != nil {
 		return fmt.Errorf("fail project initialization intent: %w", err)
 	}
 	if count, err := result.RowsAffected(); err != nil {
-		return err
+		return fmt.Errorf("check failed project initialization intent: %w", err)
 	} else if count != 1 {
 		return fmt.Errorf("fail project initialization intent: %w", domain.ErrInternal)
 	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit failed project initialization: %w", err)
+	}
+	committed = true
 	return nil
 }
 
@@ -183,7 +214,7 @@ func (s *Store) FindProject(ctx context.Context, projectID domain.ProjectID) (*d
 }
 
 // Finalize 在一个事务中完成 Project、首个 Event 和 Receipt。
-func (s *Store) Finalize(ctx context.Context, key string, intent domain.ProjectInitializationIntent, manifest domain.ProjectManifest, binding domain.RepositoryBinding, allowRebind bool) (project domain.Project, err error) {
+func (s *Store) Finalize(ctx context.Context, key string, intent domain.ProjectInitializationIntent, manifest domain.ProjectManifest, binding domain.RepositoryBinding, rebindFrom string) (project domain.Project, err error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return project, fmt.Errorf("begin project finalization: %w", err)
@@ -221,11 +252,17 @@ func (s *Store) Finalize(ctx context.Context, key string, intent domain.ProjectI
 		}
 		project = *projectPtr
 		if project.Binding.Root != binding.Root {
-			if !allowRebind {
+			if rebindFrom == "" || project.Binding.Root != rebindFrom {
 				return project, fmt.Errorf("%w: active repository root differs", domain.ErrProjectIdentityConflict)
 			}
-			if _, err := tx.ExecContext(ctx, `UPDATE t_projects SET repository_root = ?, manifest_path = ? WHERE project_id = ?`, binding.Root, binding.ManifestPath, manifest.ProjectID); err != nil {
+			result, err := tx.ExecContext(ctx, `UPDATE t_projects SET repository_root = ?, manifest_path = ? WHERE project_id = ? AND repository_root = ?`, binding.Root, binding.ManifestPath, manifest.ProjectID, rebindFrom)
+			if err != nil {
 				return project, fmt.Errorf("rebind project: %w", err)
+			}
+			if count, err := result.RowsAffected(); err != nil {
+				return project, fmt.Errorf("check rebind project: %w", err)
+			} else if count != 1 {
+				return project, fmt.Errorf("%w: repository binding changed during rebind", domain.ErrProjectIdentityConflict)
 			}
 			project.Binding = binding
 		}
@@ -270,6 +307,27 @@ func (s *Store) writeSuccessReceipt(ctx context.Context, tx *sql.Tx, key, root s
 	const receiptQuery = `INSERT INTO t_project_initialization_receipts (idempotency_key, repository_root, project_id, status, created_at) VALUES (?, ?, ?, 'succeeded', ?)`
 	if _, err := tx.ExecContext(ctx, receiptQuery, key, root, projectID, stamp); err != nil {
 		return fmt.Errorf("insert project initialization receipt: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) writeFailureReceipt(ctx context.Context, tx *sql.Tx, key, root string, projectID domain.ProjectID, code, stamp string) error {
+	existing, err := readReceipt(ctx, tx, key)
+	if err != nil {
+		return err
+	}
+	if existing != nil {
+		if existing.RepositoryRoot != root {
+			return fmt.Errorf("%w: receipt key differs", domain.ErrIdempotencyConflict)
+		}
+		if existing.Status == "failed" && existing.FailureCode == code {
+			return nil
+		}
+		return fmt.Errorf("%w: receipt already finalized", domain.ErrInternal)
+	}
+	const query = `INSERT INTO t_project_initialization_receipts (idempotency_key, repository_root, project_id, status, failure_code, created_at) VALUES (?, ?, ?, 'failed', ?, ?)`
+	if _, err := tx.ExecContext(ctx, query, key, root, projectID, code, stamp); err != nil {
+		return fmt.Errorf("insert failed project initialization receipt: %w", err)
 	}
 	return nil
 }
@@ -357,6 +415,18 @@ func readIntentByKey(ctx context.Context, tx *sql.Tx, key string) (*domain.Proje
 	}
 	if err != nil {
 		return nil, fmt.Errorf("read intent by key: %w", err)
+	}
+	return &intent, nil
+}
+
+func readIntentByID(ctx context.Context, tx *sql.Tx, intentID string) (*domain.ProjectInitializationIntent, error) {
+	var intent domain.ProjectInitializationIntent
+	err := tx.QueryRowContext(ctx, `SELECT intent_id, project_id, repository_root, idempotency_key, status, failure_code FROM t_project_initialization_intents WHERE intent_id = ?`, intentID).Scan(&intent.ID, &intent.ProjectID, &intent.RepositoryRoot, &intent.IdempotencyKey, &intent.Status, &intent.FailureCode)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read intent by id: %w", err)
 	}
 	return &intent, nil
 }

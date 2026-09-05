@@ -64,7 +64,10 @@ func (Git) RootExists(ctx context.Context, path string) (bool, error) {
 	}
 	info, err := os.Stat(path)
 	if err == nil {
-		return info.IsDir(), nil
+		if !info.IsDir() {
+			return false, fmt.Errorf("previous repository root is not a directory: %w", domain.ErrProjectIdentityConflict)
+		}
+		return true, nil
 	}
 	if os.IsNotExist(err) {
 		return false, nil

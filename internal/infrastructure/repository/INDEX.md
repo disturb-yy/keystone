@@ -6,5 +6,5 @@
 
 | 文件 | 职责 |
 | --- | --- |
-| `git.go` | Git root、拓扑和旧 root 存在性识别 |
+| `git.go` | Git root、拓扑和旧 root 可验证性识别；非目录旧 root 返回领域冲突 |
 | `git_test.go` | 临时真实 Git Repository 行为测试 |

@@ -7,6 +7,6 @@
 
 | 文件 | 职责 |
 | --- | --- |
-| `model.go` | Project Bootstrap 的实体、值对象和状态 |
+| `model.go` | Project Bootstrap 的实体、值对象、RFC4122 UUIDv7 和状态不变量 |
 | `errors.go` | 可映射到 Control Plane 的业务错误 |
 | `model_test.go` | ProjectID、Binding 和事件不变量测试 |

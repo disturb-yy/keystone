@@ -40,7 +40,7 @@ func TestReserveFinalizeAndReplayKeepsOneEvent(t *testing.T) {
 		t.Fatal(err)
 	}
 	manifest := domain.ProjectManifest{Version: 1, ProjectID: first.Intent.ProjectID}
-	project, err := store.Finalize(ctx, "key-1", first.Intent, manifest, binding, false)
+	project, err := store.Finalize(ctx, "key-1", first.Intent, manifest, binding, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +58,7 @@ func TestReserveFinalizeAndReplayKeepsOneEvent(t *testing.T) {
 	if second.Intent.ProjectID != project.Identity.ProjectID {
 		t.Fatalf("second intent project = %q, want %q", second.Intent.ProjectID, project.Identity.ProjectID)
 	}
-	if _, err := store.Finalize(ctx, "key-2", second.Intent, manifest, binding, false); err != nil {
+	if _, err := store.Finalize(ctx, "key-2", second.Intent, manifest, binding, ""); err != nil {
 		t.Fatal(err)
 	}
 	events, err := store.ListEvents(ctx, project.Identity.ProjectID)
@@ -87,7 +87,7 @@ func TestSharedPendingIntentWritesReceiptsForBothKeys(t *testing.T) {
 		t.Fatalf("shared intent = %+v, want original intent %q", second.Intent, first.Intent.ID)
 	}
 	manifest := domain.ProjectManifest{Version: 1, ProjectID: first.Intent.ProjectID}
-	project, err := store.Finalize(ctx, "key-2", second.Intent, manifest, binding, false)
+	project, err := store.Finalize(ctx, "key-2", second.Intent, manifest, binding, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,6 +109,88 @@ func TestSharedPendingIntentWritesReceiptsForBothKeys(t *testing.T) {
 	}
 }
 
+func TestFailIntentWritesStableFailureForSharedKeysAndReleasesRoot(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+	root := "/tmp/workstore-failed-shared"
+	first, err := store.Reserve(ctx, root, "key-1", domain.NewProjectID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.Reserve(ctx, root, "key-2", domain.NewProjectID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.FailIntent(ctx, second.Intent, "key-2", "manifest_invalid"); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"key-1", "key-2"} {
+		if _, err := store.Reserve(ctx, root, key, domain.NewProjectID()); !errors.Is(err, domain.ErrManifestInvalid) {
+			t.Fatalf("Reserve(%q) error = %v, want ErrManifestInvalid", key, err)
+		}
+	}
+	retry, err := store.Reserve(ctx, root, "key-3", domain.NewProjectID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retry.Intent.ID == first.Intent.ID || retry.Intent.Status != domain.IntentPending {
+		t.Fatalf("retry intent = %+v, want a new pending intent", retry.Intent)
+	}
+}
+
+func TestConcurrentRebindsAllowOnlyOneStaleTransition(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+	oldRoot := "/tmp/workstore-rebind-old"
+	oldBinding := domain.RepositoryBinding{Root: oldRoot, ManifestPath: oldRoot + "/.keystone/project.yaml"}
+	initial, err := store.Reserve(ctx, oldRoot, "initial", domain.NewProjectID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest := domain.ProjectManifest{Version: 1, ProjectID: initial.Intent.ProjectID}
+	if _, err := store.Finalize(ctx, "initial", initial.Intent, manifest, oldBinding, ""); err != nil {
+		t.Fatal(err)
+	}
+	rootA := "/tmp/workstore-rebind-a"
+	rootB := "/tmp/workstore-rebind-b"
+	reservationA, err := store.Reserve(ctx, rootA, "rebind-a", domain.NewProjectID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	reservationB, err := store.Reserve(ctx, rootB, "rebind-b", domain.NewProjectID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := make(chan struct{})
+	type result struct{ err error }
+	results := make(chan result, 2)
+	go func() {
+		<-start
+		_, err := store.Finalize(ctx, "rebind-a", reservationA.Intent, manifest, domain.RepositoryBinding{Root: rootA, ManifestPath: rootA + "/.keystone/project.yaml"}, oldRoot)
+		results <- result{err: err}
+	}()
+	go func() {
+		<-start
+		_, err := store.Finalize(ctx, "rebind-b", reservationB.Intent, manifest, domain.RepositoryBinding{Root: rootB, ManifestPath: rootB + "/.keystone/project.yaml"}, oldRoot)
+		results <- result{err: err}
+	}()
+	close(start)
+	var successes int
+	for range 2 {
+		result := <-results
+		if result.err == nil {
+			successes++
+			continue
+		}
+		if !errors.Is(result.err, domain.ErrProjectIdentityConflict) {
+			t.Fatalf("concurrent rebind error = %v, want ErrProjectIdentityConflict", result.err)
+		}
+	}
+	if successes != 1 {
+		t.Fatalf("concurrent rebind successes = %d, want 1", successes)
+	}
+}
+
 func TestFinalizeRejectsMissingEventWithoutRepair(t *testing.T) {
 	ctx := context.Background()
 	store := newTestStore(t)
@@ -118,7 +200,7 @@ func TestFinalizeRejectsMissingEventWithoutRepair(t *testing.T) {
 		t.Fatal(err)
 	}
 	binding := domain.RepositoryBinding{Root: root, ManifestPath: root + "/.keystone/project.yaml"}
-	if _, err := store.Finalize(ctx, "key", first.Intent, domain.ProjectManifest{Version: 1, ProjectID: first.Intent.ProjectID}, binding, false); err != nil {
+	if _, err := store.Finalize(ctx, "key", first.Intent, domain.ProjectManifest{Version: 1, ProjectID: first.Intent.ProjectID}, binding, ""); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.db.Exec(`DELETE FROM t_project_events WHERE project_id = ?`, first.Intent.ProjectID); err != nil {
@@ -128,7 +210,7 @@ func TestFinalizeRejectsMissingEventWithoutRepair(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = store.Finalize(ctx, "other-key", reservation.Intent, domain.ProjectManifest{Version: 1, ProjectID: first.Intent.ProjectID}, binding, false)
+	_, err = store.Finalize(ctx, "other-key", reservation.Intent, domain.ProjectManifest{Version: 1, ProjectID: first.Intent.ProjectID}, binding, "")
 	if !errors.Is(err, domain.ErrInternal) {
 		t.Fatalf("Finalize() error = %v, want ErrInternal", err)
 	}
