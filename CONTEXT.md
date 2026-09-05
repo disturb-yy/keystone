@@ -84,6 +84,10 @@ _避免_：启动日志、Manifest 写入记录、Lifecycle 推进
 由 Daemon 权威持有、绑定一个 Project 与不可变 BaseRevision 的长期变更意图及其生命周期事实。
 _避免_：单次 AgentRun、Git Worktree、Client 本地草稿
 
+**ChangeCreation**：
+以绝对 RepositoryBinding 路径和 Intent 提交的 Control Plane Command；Daemon 解析既有 Project 后才创建 Change，Client 不读取 ProjectManifest 或直接指定 ProjectID。
+_避免_：ProjectInitialization、Client Manifest 读取、隐式 init
+
 **BaseRevision**：
 在 Change 创建时确认并固定的源 Repository 版本快照；后续生命周期不得用当前 HEAD 覆盖它。
 _避免_：运行时 HEAD、候选提交、用户输入的 revision
@@ -100,8 +104,16 @@ _避免_：ProjectInitializationIntent、可编辑描述、运行日志
 Change 最近一个已确认、已持久化的生命周期检查点，按 Intent、Understand、Design、Plan、Ticketize、Execute、Verify、FinalVerify 的既定顺序前进。
 _避免_：当前进程状态、Client 可直接设置的字段、ChangeStatus
 
+**LifecycleCoordinator**：
+由 Daemon 持有的生命周期协调者，依据已确认事实决定是否允许下一步；它不拥有 Stage 的业务产出，也不直接执行工具。
+_避免_：StageStrategy、Worker、Client 状态修改器
+
+**StageStrategy**：
+为一个 LifecycleStage 提供输入到候选输出的受限能力；其结果须由 LifecycleCoordinator 验证后才可能形成权威检查点。
+_避免_：LifecycleCoordinator、AgentRun、状态权威
+
 **ChangeStatus**：
-决定 Change 是否允许继续协调的运行控制状态；V1 使用 active、paused、human_required、cancelled 与 integrate_ready，且可重试 Stage 失败进入 human_required，integrate_ready 只在 FinalVerify 成功后出现。
+决定 Change 是否允许继续协调的运行控制状态；V1 使用 active、paused、human_required、cancelled 与 integrate_ready，且可重试 Stage 失败进入 human_required，integrate_ready 只在 FinalVerify 成功后出现。paused 和 cancelled 不允许晚到结果推进检查点。
 _避免_：LifecycleStage、AgentRun outcome、Verify 结果
 
 **Artifact**：
@@ -121,8 +133,16 @@ Artifact 在生命周期中的语义类别；M3 仅产生 change_intent，后续
 _避免_：文件扩展名、MIME type、LifecycleStage
 
 **DomainEvent**：
-在权威业务事实发生时追加的不可变审计记录；它解释状态如何到达当前值，但不以重放替代权威状态。
+在权威业务事实发生时追加的不可变审计记录；它解释状态如何到达当前值，但不以重放替代权威状态。它的公开表达只包含固定的边界字段和 ArtifactRef，不承载无约束内容。
 _避免_：应用日志、Worker 自报、完整 Event Sourcing
+
+**ChangeEvent**：
+归属于一个 Change 并具有 EventSequence 的 DomainEvent；它以受控 EventType 与固定来源信息表达事实，丰富内容由 ArtifactRef 另行定位。
+_避免_：通用 JSON details、应用日志、Change 当前状态快照
+
+**EventType**：
+DomainEvent 的受控语义名称，用于表达已发生的业务事实，而不是可自由扩展的日志级别或错误分类。
+_避免_：日志级别、HTTP 错误码、Runtime 输出类型
 
 **EventSequence**：
 同一业务聚合内 DomainEvent 的单调发生顺序，用于可靠复盘而不依赖 UUID 或时间戳排序。
@@ -132,13 +152,29 @@ _避免_：UUIDv7 顺序、全局因果顺序、日志行号
 与一个幂等键及其规范化 Command 绑定的持久化结果，使相同请求可重放而不同请求不能复用同一键。
 _避免_：Client 缓存、Event、一次性 HTTP 响应
 
+**ChangeVersion**：
+Change 权威状态的单调版本，用于拒绝基于陈旧观察提交的不同 Command；它不表达 EventSequence 或 BaseRevision。
+_避免_：EventSequence、Git revision、Idempotency-Key
+
 **AgentRun**：
-为一个 LifecycleStage 创建的单次不可变执行尝试；Retry 必须创建新的 AgentRun，不能改写既有尝试或 Change 的已确认检查点。
+为一个 LifecycleStage 创建的单次执行尝试，其身份、输入、关联 ArtifactRef 与 attempt 不可变，且只可记录一次终态。Retry 必须创建新的 AgentRun，不能改写既有尝试或 Change 的已确认检查点。paused 或 cancelled 后到达的结果仍可追溯，但不能自行推进检查点。
 _避免_：Change、Worker、可复用任务槽
 
+**AgentRunOutcome**：
+AgentRun 一次性完成时记录的实际结果；V1 使用 succeeded、failed 或 human_required。Change 的 Cancel 是控制面状态，不是 AgentRunOutcome。
+_避免_：ChangeStatus、Worker lease、执行进程退出信号
+
 **HumanDecision**：
-对 human_required Change 追加的人工恢复事实；Daemon 解释其合法动作，Client 不直接指定 LifecycleStage 或 ChangeStatus。
+对 human_required Change 追加的人工恢复事实；M3 只允许 retry 或 cancel，Daemon 解释其合法动作，Client 不直接指定 LifecycleStage 或 ChangeStatus。
 _避免_：状态字段覆盖、可编辑备注、Worker Report
+
+**ChangeCommand**：
+由 Client 提交、以 ChangeVersion 为前置条件的状态控制请求；M3 只允许 pause、resume 与 cancel，不承载 HumanDecision 或目标状态字段。
+_避免_：HumanDecision、Event、直接状态更新
+
+**ChangeCommandReceipt**：
+对 ChangeCommand 或 HumanDecision 的持久化幂等结果；它与 ProjectInitializationReceipt 共享重放语义，但不共享恢复职责或物理记录。
+_避免_：ProjectInitializationReceipt、Client 缓存、DomainEvent
 
 **Actor**：
 Command、Decision 或 DomainEvent 的来源归属。M3 仅用 human:local 与 daemon:local 表示本机来源，不能将它解释为已验证身份或授权主体。

@@ -21,3 +21,10 @@
 | [0007](./0007-domain-event-audit-ledger.md) | 追加式 Domain Event 审计账本 | 已接受 |
 | [0008](./0008-change-creation-source-snapshot.md) | Change 创建时固定干净源快照 | 已接受 |
 | [0009](./0009-failure-recovery-requires-human-decision.md) | 失败恢复要求人工 Decision | 已接受 |
+| [0010](./0010-late-agent-run-result-fence.md) | Pause 与 Cancel 隔离晚到 AgentRun 结果 | 已接受 |
+| [0011](./0011-change-command-version-precondition.md) | Change Command 的版本前置条件 | 已接受 |
+| [0012](./0012-agent-run-single-write-outcome.md) | AgentRun 的一次性终态 | 已接受 |
+| [0013](./0013-separate-change-command-and-decision-boundaries.md) | Change Command 与 HumanDecision 分离 | 已接受 |
+| [0014](./0014-unified-event-ledger-with-narrow-contracts.md) | 统一 Event 账本保持窄边界 Contract | 已接受 |
+| [0015](./0015-separate-project-and-change-receipts.md) | Project 与 Change 的 Receipt 分离 | 已接受 |
+| [0016](./0016-daemon-resolves-project-for-change-creation.md) | Daemon 为 Change 创建解析 Project | 已接受 |
