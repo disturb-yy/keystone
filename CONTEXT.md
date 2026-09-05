@@ -81,19 +81,23 @@ _避免_：启动日志、Manifest 写入记录、Lifecycle 推进
 ## Change 生命周期与审计
 
 **Change**：
-由 Daemon 权威持有、绑定一个 Project 与不可变 BaseRevision 的长期变更意图及其生命周期事实。
+由 Daemon 权威持有、绑定一个 Project 与不可变 BaseRevision 的长期变更意图及其生命周期事实。一个 Project 可同时拥有多个 Change；除同一 IdempotencyKey 的同一规范请求外，M3 不按 Intent、BaseRevision 或 RepositoryBinding 进行业务去重。
 _避免_：单次 AgentRun、Git Worktree、Client 本地草稿
 
 **ChangeCreation**：
-以绝对 RepositoryBinding 路径和 Intent 提交的 Control Plane Command；Daemon 解析既有 Project 后才创建 Change，Client 不读取 ProjectManifest 或直接指定 ProjectID。
+以绝对 RepositoryBinding 路径和经过严格边界验证的 ChangeIntent 提交的 Control Plane Command；Daemon 解析既有 Project 后才创建 Change，Client 不读取 ProjectManifest 或直接指定 ProjectID。
 _避免_：ProjectInitialization、Client Manifest 读取、隐式 init
 
+**ChangeIntent**：
+创建 Change 的原始文本意图。M3 只接受去除首尾空白后非空、有效 UTF-8 且原始长度不超过 64 KiB 的值；通过校验后原样保存为 ChangeIntentArtifact，不能以摘要或规范化文本替代原始内容。
+_避免_：可变的 Change 描述、预先规范化的摘要、任意 JSON payload
+
 **BaseRevision**：
-在 Change 创建时确认并固定的源 Repository 版本快照；后续生命周期不得用当前 HEAD 覆盖它。
+在 Change 创建时确认并固定的源 Repository 版本快照；它是 `git rev-parse --verify HEAD^{commit}` 返回的完整小写 Git OID（依 Repository 的对象格式为 40 或 64 位），后续生命周期不得用当前 HEAD 覆盖它。
 _避免_：运行时 HEAD、候选提交、用户输入的 revision
 
 **ChangeSourceSnapshot**：
-创建 Change 时对干净 RepositoryBinding 作出的只读版本确认，由 BaseRevision 表达其固定版本。
+创建 Change 时对干净 RepositoryBinding 作出的只读版本确认，由 BaseRevision 表达其固定版本。M3 连续执行“干净状态、HEAD、干净状态、HEAD”两轮确认，且两次 HEAD 必须相同；M3 以 `git status --porcelain=v1 --untracked-files=all --ignore-submodules=none` 的空输出定义干净。已暂存、未暂存、未跟踪和子模块变化均阻止创建，被忽略文件不阻止；HEAD 变化为 source_snapshot_unstable，unborn HEAD 不能形成快照。该边界不加 Git 锁，也不声称消除本机 TOCTOU。
 _避免_：Git Worktree、运行时工作目录、Client 传入的 revision
 
 **ChangeIntentArtifact**：
@@ -132,13 +136,29 @@ _避免_：完整 Artifact、Event payload、错误文本
 Artifact 在生命周期中的语义类别；M3 仅产生 change_intent，后续类别由拥有相应 Stage 的 Ticket 增加。
 _避免_：文件扩展名、MIME type、LifecycleStage
 
+**ArtifactContent**：
+由 ArtifactRef 定位的原始不可变字节。M3 在 LocalStateRoot 的 SHA-256 分层目录中先完成同目录临时写入、文件 Sync 与原子 rename，才允许 SQLite 引用它；普通进程失败不能留下指向未成功写入内容的权威引用。断电后的缺失或摘要不符由每次读取时的 SHA-256 校验发现并作为 unavailable 返回，M3 不伪造跨平台断电持久性或自动修复。
+_避免_：ArtifactSummary、数据库 BLOB 暴露、未校验的本机文件读取
+
+**ChangeReadModel**：
+供 Client 观察的有界 Change 快照，由 ChangeView 表达当前字段并以 repository_root 返回规范化 RepositoryBinding，所有时间字段使用 UTC RFC3339Nano；Event、AgentRun、ArtifactRef 和 HumanDecision 保留在独立 Trace 列表中。M3 不在一个 Change 查询中嵌入完整历史、原始 Artifact 内容或无界分页结果。
+_避免_：持久化行模型、完整审计导出、可变 Client 缓存
+
 **DomainEvent**：
 在权威业务事实发生时追加的不可变审计记录；它解释状态如何到达当前值，但不以重放替代权威状态。它的公开表达只包含固定的边界字段和 ArtifactRef，不承载无约束内容。
 _避免_：应用日志、Worker 自报、完整 Event Sourcing
 
+**UnifiedEventLedger**：
+同一物理 `t_events` 账本对 Project 与 Change 保存追加式 DomainEvent。M2 只写入并公开窄的 ProjectInitialized 查询；M3 在同一账本上扩展 Change 追溯，不能另建第二个业务 Event 账本。
+_避免_：通用 Event stream、Project/Change 双账本、完整 Event Sourcing
+
 **ChangeEvent**：
-归属于一个 Change 并具有 EventSequence 的 DomainEvent；它以受控 EventType 与固定来源信息表达事实，丰富内容由 ArtifactRef 另行定位。
+归属于一个 Change 并具有 EventSequence 的 DomainEvent；它以受控 EventType、固定来源信息、有序 ArtifactRef 关联及可空的 AgentRun 或 HumanDecision 标识表达事实。这样 Trace 可准确归因而不使用自由 payload。
 _避免_：通用 JSON details、应用日志、Change 当前状态快照
+
+**EventArtifactLink**：
+一个 ChangeEvent 与同一 Change 的 ArtifactRef 之间的有序、强类型关联；它独立保存以维持外键完整性和响应中的 artifact_ref_ids 顺序，不是通用多态 owner 关系。
+_避免_：t_events 中的 UUID JSON 数组、无归属校验的引用、Artifact 内容副本
 
 **EventType**：
 DomainEvent 的受控语义名称，用于表达已发生的业务事实，而不是可自由扩展的日志级别或错误分类。
@@ -149,8 +169,12 @@ _避免_：日志级别、HTTP 错误码、Runtime 输出类型
 _避免_：UUIDv7 顺序、全局因果顺序、日志行号
 
 **CommandReceipt**：
-与一个幂等键及其规范化 Command 绑定的持久化结果，使相同请求可重放而不同请求不能复用同一键。
+与一个幂等键及其规范化 Command 绑定的持久化成功结果，保存首次提交的有界 HTTP 状态码与规范响应体，使相同请求在 Change 后续变化后仍可重放原结果。只有成功提交的变更操作创建 Receipt；未产生权威副作用的输入、冲突或 unavailable 结果不占用该键。
 _避免_：Client 缓存、Event、一次性 HTTP 响应
+
+**IdempotencyKey**：
+由调用者为一次可重试变更操作显式提供的不透明键。M3 的 ChangeCreation、ChangeCommand 与 HumanDecision 均须携带它；CLI 不为每次调用静默生成新键，以免掩盖调用者的重试边界。
+_避免_：ChangeVersion、EventSequence、由 CLI 隐式生成的一次性重试标识
 
 **ChangeVersion**：
 Change 权威状态的单调版本，用于拒绝基于陈旧观察提交的不同 Command；它不表达 EventSequence 或 BaseRevision。
@@ -160,9 +184,17 @@ _避免_：EventSequence、Git revision、Idempotency-Key
 为一个 LifecycleStage 创建的单次执行尝试，其身份、输入、关联 ArtifactRef 与 attempt 不可变，且只可记录一次终态。Retry 必须创建新的 AgentRun，不能改写既有尝试或 Change 的已确认检查点。paused 或 cancelled 后到达的结果仍可追溯，但不能自行推进检查点。
 _避免_：Change、Worker、可复用任务槽
 
+**AgentRunArtifactLink**：
+一个 AgentRun 与同一 Change 的 ArtifactRef 之间的有序、强类型关联；M3 只使用 input、output 与 failure 角色，以固定某次 attempt 实际消费和产生的证据，不使用 JSON 数组或通用 owner 表。
+_避免_：从当前 Change 倒推的可变输入、EventArtifactLink、Worker 临时目录
+
 **AgentRunOutcome**：
 AgentRun 一次性完成时记录的实际结果；V1 使用 succeeded、failed 或 human_required。Change 的 Cancel 是控制面状态，不是 AgentRunOutcome。
 _避免_：ChangeStatus、Worker lease、执行进程退出信号
+
+**AgentRunStatus**：
+AgentRun 在读取模型中的执行状态；M3 只使用 running 与 completed，且 completed 必有 AgentRunOutcome 与 completed_at，running 的 outcome 与 completed_at 均为空。
+_避免_：ChangeStatus、AgentRunOutcome、Worker 进程存活探针
 
 **HumanDecision**：
 对 human_required Change 追加的人工恢复事实；M3 只允许 retry 或 cancel，Daemon 解释其合法动作，Client 不直接指定 LifecycleStage 或 ChangeStatus。
@@ -173,12 +205,16 @@ _避免_：状态字段覆盖、可编辑备注、Worker Report
 _避免_：HumanDecision、Event、直接状态更新
 
 **ChangeCommandReceipt**：
-对 ChangeCommand 或 HumanDecision 的持久化幂等结果；它与 ProjectInitializationReceipt 共享重放语义，但不共享恢复职责或物理记录。
+对 ChangeCreation、ChangeCommand 或 HumanDecision 的持久化成功幂等结果；它与对应状态、Event、Decision 和首次响应在同一 SQLite transaction 提交。它与 ProjectInitializationReceipt 共享重放语义，但不共享恢复职责或物理记录。
 _避免_：ProjectInitializationReceipt、Client 缓存、DomainEvent
 
 **Actor**：
 Command、Decision 或 DomainEvent 的来源归属。M3 仅用 human:local 与 daemon:local 表示本机来源，不能将它解释为已验证身份或授权主体。
 _避免_：访问令牌、RBAC Principal、状态权威
+
+**ControlPlaneError**：
+Control Plane 对非成功请求返回的安全 ErrorEnvelope。稳定 code 用于区分输入、未找到、可由调用者处理的冲突、暂时不可用和内部错误；message 只供人阅读，不能包含 SQL、Git 原始错误或本机绝对路径。
+_避免_：DomainEvent、任意 details JSON、基础设施异常直出
 
 ## 工作流与端点
 

@@ -28,3 +28,12 @@
 | [0014](./0014-unified-event-ledger-with-narrow-contracts.md) | 统一 Event 账本保持窄边界 Contract | 已接受 |
 | [0015](./0015-separate-project-and-change-receipts.md) | Project 与 Change 的 Receipt 分离 | 已接受 |
 | [0016](./0016-daemon-resolves-project-for-change-creation.md) | Daemon 为 Change 创建解析 Project | 已接受 |
+| [0017](./0017-cli-change-mutations-require-caller-idempotency-key.md) | CLI Change 变更操作要求调用者提供幂等键 | 已接受 |
+| [0018](./0018-change-intent-is-raw-immutable-artifact.md) | Change Intent 作为原样不可变 Artifact 保存 | 已接受 |
+| [0019](./0019-change-snapshot-and-trace-reads-are-separate.md) | Change 快照与 Trace 查询分离 | 已接受 |
+| [0020](./0020-artifact-content-is-verified-on-read.md) | Artifact 内容在读取时校验摘要 | 已接受 |
+| [0021](./0021-control-plane-errors-classify-recoverability.md) | Control Plane 错误按可恢复性分类 | 已接受 |
+| [0022](./0022-change-creation-is-not-semantic-deduplication.md) | Change 创建只按幂等操作去重 | 已接受 |
+| [0023](./0023-work-owns-business-persistence-daemon-composes.md) | Work 拥有业务持久化，Daemon 负责组合 | 已接受 |
+| [0024](./0024-change-receipt-replays-first-success-response.md) | Change Receipt 重放首次成功响应 | 已接受 |
+| [0025](./0025-sqlite-enforces-work-invariants.md) | SQLite 执行 Work 的关键不变量 | 已接受 |
