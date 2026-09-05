@@ -16,11 +16,21 @@ import (
 
 const manifestContent = "version: 1\nproject_id: %s\n"
 
+type manifestFile interface {
+	Write([]byte) (int, error)
+	Sync() error
+	Close() error
+}
+
+type openManifestFile func(string, int, os.FileMode) (manifestFile, error)
+
 // Store 负责 Repository 内 `.keystone/project.yaml` 的读写。
-type Store struct{}
+type Store struct {
+	openFile openManifestFile
+}
 
 // Ensure 严格读取现有 Manifest，或使用 candidate 创建缺失 Manifest。
-func (Store) Ensure(ctx context.Context, binding domain.RepositoryBinding, candidate domain.ProjectID) (domain.ProjectManifest, error) {
+func (s Store) Ensure(ctx context.Context, binding domain.RepositoryBinding, candidate domain.ProjectID) (domain.ProjectManifest, error) {
 	if ctx == nil {
 		return domain.ProjectManifest{}, fmt.Errorf("ensure manifest: %w", domain.ErrInvalidRequest)
 	}
@@ -33,7 +43,7 @@ func (Store) Ensure(ctx context.Context, binding domain.RepositoryBinding, candi
 	if err := prepareDirectory(filepath.Dir(binding.ManifestPath)); err != nil {
 		return domain.ProjectManifest{}, err
 	}
-	manifestBytes, err := readOrCreate(ctx, binding.ManifestPath, candidate)
+	manifestBytes, err := s.readOrCreate(ctx, binding.ManifestPath, candidate)
 	if err != nil {
 		return domain.ProjectManifest{}, err
 	}
@@ -61,17 +71,10 @@ func prepareDirectory(path string) error {
 	return nil
 }
 
-func readOrCreate(ctx context.Context, path string, candidate domain.ProjectID) ([]byte, error) {
+func (s Store) readOrCreate(ctx context.Context, path string, candidate domain.ProjectID) (data []byte, err error) {
 	info, err := os.Lstat(path)
 	if err == nil {
-		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
-			return nil, fmt.Errorf("manifest file topology is invalid: %w", domain.ErrManifestInvalid)
-		}
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return nil, fmt.Errorf("read project manifest: %w", domain.ErrManifestUnavailable)
-		}
-		return data, nil
+		return readExisting(path, info)
 	}
 	if !os.IsNotExist(err) {
 		return nil, fmt.Errorf("inspect project manifest: %w", domain.ErrManifestUnavailable)
@@ -79,34 +82,71 @@ func readOrCreate(ctx context.Context, path string, candidate domain.ProjectID) 
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("create project manifest: %w", err)
 	}
-	data := []byte(fmt.Sprintf(manifestContent, candidate))
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0644)
+	data = []byte(fmt.Sprintf(manifestContent, candidate))
+	file, err := s.open(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0644)
 	if err != nil {
 		if errors.Is(err, os.ErrExist) {
-			return readOrCreate(ctx, path, candidate)
+			return s.readOrCreate(ctx, path, candidate)
 		}
 		return nil, fmt.Errorf("create project manifest: %w", domain.ErrManifestUnavailable)
 	}
 	closed := false
+	verified := false
 	defer func() {
 		if !closed {
 			_ = file.Close()
 		}
-	}()
-	if written, err := file.Write(data); err != nil || written != len(data) {
-		if err == nil {
-			err = io.ErrShortWrite
+		if !verified {
+			if removeErr := os.Remove(path); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+				err = errors.Join(err, fmt.Errorf("remove incomplete project manifest: %w", removeErr))
+			}
 		}
-		return nil, fmt.Errorf("write project manifest: %w", domain.ErrManifestUnavailable)
+	}()
+	if written, writeErr := file.Write(data); writeErr != nil || written != len(data) {
+		if writeErr == nil {
+			writeErr = io.ErrShortWrite
+		}
+		return nil, fmt.Errorf("write project manifest: %w", errors.Join(domain.ErrManifestUnavailable, writeErr))
 	}
-	if err := file.Sync(); err != nil {
-		return nil, fmt.Errorf("sync project manifest: %w", domain.ErrManifestUnavailable)
+	if syncErr := file.Sync(); syncErr != nil {
+		return nil, fmt.Errorf("sync project manifest: %w", errors.Join(domain.ErrManifestUnavailable, syncErr))
 	}
-	if err := file.Close(); err != nil {
-		closed = true
-		return nil, fmt.Errorf("close project manifest: %w", domain.ErrManifestUnavailable)
-	}
+	closeErr := file.Close()
 	closed = true
+	if closeErr != nil {
+		closed = true
+		return nil, fmt.Errorf("close project manifest: %w", errors.Join(domain.ErrManifestUnavailable, closeErr))
+	}
+	verifiedData, verifyErr := readExisting(path, nil)
+	if verifyErr != nil {
+		return nil, verifyErr
+	}
+	verified = true
+	return verifiedData, nil
+}
+
+func (s Store) open(path string, flags int, mode os.FileMode) (manifestFile, error) {
+	if s.openFile != nil {
+		return s.openFile(path, flags, mode)
+	}
+	return os.OpenFile(path, flags, mode)
+}
+
+func readExisting(path string, info os.FileInfo) ([]byte, error) {
+	if info == nil {
+		var err error
+		info, err = os.Lstat(path)
+		if err != nil {
+			return nil, fmt.Errorf("read project manifest: %w", domain.ErrManifestUnavailable)
+		}
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("manifest file topology is invalid: %w", domain.ErrManifestInvalid)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read project manifest: %w", domain.ErrManifestUnavailable)
+	}
 	return data, nil
 }
 

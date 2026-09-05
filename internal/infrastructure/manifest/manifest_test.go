@@ -3,6 +3,7 @@ package manifest
 import (
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -109,3 +110,36 @@ func TestEnsureAcceptsCRLFManifestWithoutRewritingIt(t *testing.T) {
 		t.Fatalf("manifest bytes changed from CRLF: %q", data)
 	}
 }
+
+func TestEnsureCleansIncompleteCreatedFileAndRetryCanRecover(t *testing.T) {
+	root := t.TempDir()
+	binding := domain.RepositoryBinding{Root: root, ManifestPath: filepath.Join(root, ".keystone", "project.yaml")}
+	if err := os.MkdirAll(filepath.Dir(binding.ManifestPath), 0755); err != nil {
+		t.Fatal(err)
+	}
+	store := Store{openFile: func(path string, flags int, mode os.FileMode) (manifestFile, error) {
+		file, err := os.OpenFile(path, flags, mode)
+		if err != nil {
+			return nil, err
+		}
+		return shortWriteFile{file: file}, nil
+	}}
+	_, err := store.Ensure(context.Background(), binding, domain.NewProjectID())
+	if !errors.Is(err, domain.ErrManifestUnavailable) {
+		t.Fatalf("Ensure() error = %v, want ErrManifestUnavailable", err)
+	}
+	if _, statErr := os.Stat(binding.ManifestPath); !os.IsNotExist(statErr) {
+		t.Fatalf("incomplete manifest stat error = %v, want not exist", statErr)
+	}
+	if _, err := (Store{}).Ensure(context.Background(), binding, domain.NewProjectID()); err != nil {
+		t.Fatalf("retry Ensure() error = %v", err)
+	}
+}
+
+type shortWriteFile struct {
+	file *os.File
+}
+
+func (f shortWriteFile) Write([]byte) (int, error) { return 0, io.ErrShortWrite }
+func (f shortWriteFile) Sync() error               { return f.file.Sync() }
+func (f shortWriteFile) Close() error              { return f.file.Close() }

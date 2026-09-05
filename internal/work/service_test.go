@@ -102,6 +102,68 @@ func TestInitializePreservesInvalidManifest(t *testing.T) {
 	}
 }
 
+func TestServiceSharedPendingKeysBothReplaySameProject(t *testing.T) {
+	db, err := sql.Open("sqlite", "file:service-shared-pending?mode=memory&cache=shared")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if err := migration.NewRunner(append(migration.DefaultMigrations(), workstore.Migrations()...)).Apply(context.Background(), db); err != nil {
+		t.Fatal(err)
+	}
+	state, err := workstore.New(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(t.TempDir(), "shared-repo")
+	binding := domain.RepositoryBinding{Root: root, ManifestPath: filepath.Join(root, ".keystone", "project.yaml")}
+	first, err := state.Reserve(context.Background(), root, "key-1", domain.NewProjectID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	projectID := first.Intent.ProjectID
+	service, err := work.NewService(fakeRepository{binding: binding}, fakeManifest{manifest: domain.ProjectManifest{Version: 1, ProjectID: projectID}}, state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key2Project, err := service.Initialize(context.Background(), work.InitializeRequest{RepositoryPath: root, IdempotencyKey: "key-2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	key1Project, err := service.Initialize(context.Background(), work.InitializeRequest{RepositoryPath: root, IdempotencyKey: "key-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if key1Project.Identity.ProjectID != projectID || key2Project.Identity.ProjectID != projectID {
+		t.Fatalf("key-1 project = %q, key-2 project = %q, want %q", key1Project.Identity.ProjectID, key2Project.Identity.ProjectID, projectID)
+	}
+	events, err := service.ListEvents(context.Background(), projectID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("events = %d, want 1", len(events))
+	}
+}
+
+type fakeRepository struct {
+	binding domain.RepositoryBinding
+}
+
+func (f fakeRepository) Discover(context.Context, string) (domain.RepositoryBinding, error) {
+	return f.binding, nil
+}
+
+func (fakeRepository) RootExists(context.Context, string) (bool, error) { return false, nil }
+
+type fakeManifest struct {
+	manifest domain.ProjectManifest
+}
+
+func (f fakeManifest) Ensure(context.Context, domain.RepositoryBinding, domain.ProjectID) (domain.ProjectManifest, error) {
+	return f.manifest, nil
+}
+
 func newService(t *testing.T) *work.Service {
 	t.Helper()
 	db, err := sql.Open("sqlite", "file:service-test?mode=memory&cache=shared")

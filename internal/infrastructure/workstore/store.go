@@ -230,12 +230,14 @@ func (s *Store) Finalize(ctx context.Context, key string, intent domain.ProjectI
 			project.Binding = binding
 		}
 	}
-	const receiptQuery = `INSERT INTO t_project_initialization_receipts (idempotency_key, repository_root, project_id, status, created_at) VALUES (?, ?, ?, 'succeeded', ?)`
-	if _, err := tx.ExecContext(ctx, receiptQuery, key, binding.Root, manifest.ProjectID, s.now().UTC().Format(time.RFC3339Nano)); err != nil {
-		if existing, readErr := readReceipt(ctx, tx, key); readErr != nil {
-			return project, readErr
-		} else if existing == nil || existing.RepositoryRoot != binding.Root {
-			return project, fmt.Errorf("%w: receipt key differs", domain.ErrIdempotencyConflict)
+	receiptKeys := []string{intent.IdempotencyKey}
+	if key != intent.IdempotencyKey {
+		receiptKeys = append(receiptKeys, key)
+	}
+	stamp := s.now().UTC().Format(time.RFC3339Nano)
+	for _, receiptKey := range receiptKeys {
+		if err := s.writeSuccessReceipt(ctx, tx, receiptKey, binding.Root, manifest.ProjectID, stamp); err != nil {
+			return project, err
 		}
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE t_project_initialization_intents SET status = 'succeeded', updated_at = ? WHERE intent_id = ? AND status = 'pending'`, s.now().UTC().Format(time.RFC3339Nano), intent.ID); err != nil {
@@ -246,6 +248,30 @@ func (s *Store) Finalize(ctx context.Context, key string, intent domain.ProjectI
 	}
 	committed = true
 	return project, nil
+}
+
+func (s *Store) writeSuccessReceipt(ctx context.Context, tx *sql.Tx, key, root string, projectID domain.ProjectID, stamp string) error {
+	existing, err := readReceipt(ctx, tx, key)
+	if err != nil {
+		return err
+	}
+	if existing != nil {
+		if existing.RepositoryRoot != root {
+			return fmt.Errorf("%w: receipt key differs", domain.ErrIdempotencyConflict)
+		}
+		if existing.Status != "succeeded" {
+			return errorForCode(existing.FailureCode)
+		}
+		if existing.ProjectID != projectID {
+			return fmt.Errorf("%w: receipt project differs", domain.ErrProjectIdentityConflict)
+		}
+		return nil
+	}
+	const receiptQuery = `INSERT INTO t_project_initialization_receipts (idempotency_key, repository_root, project_id, status, created_at) VALUES (?, ?, ?, 'succeeded', ?)`
+	if _, err := tx.ExecContext(ctx, receiptQuery, key, root, projectID, stamp); err != nil {
+		return fmt.Errorf("insert project initialization receipt: %w", err)
+	}
+	return nil
 }
 
 // ListEvents 返回按发生时间和 event_id 升序排列的事件。

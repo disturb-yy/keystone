@@ -70,6 +70,45 @@ func TestReserveFinalizeAndReplayKeepsOneEvent(t *testing.T) {
 	}
 }
 
+func TestSharedPendingIntentWritesReceiptsForBothKeys(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+	root := "/tmp/workstore-shared-pending"
+	binding := domain.RepositoryBinding{Root: root, ManifestPath: root + "/.keystone/project.yaml"}
+	first, err := store.Reserve(ctx, root, "key-1", domain.NewProjectID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.Reserve(ctx, root, "key-2", domain.NewProjectID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.Intent.ID != first.Intent.ID || second.Intent.IdempotencyKey != "key-1" {
+		t.Fatalf("shared intent = %+v, want original intent %q", second.Intent, first.Intent.ID)
+	}
+	manifest := domain.ProjectManifest{Version: 1, ProjectID: first.Intent.ProjectID}
+	project, err := store.Finalize(ctx, "key-2", second.Intent, manifest, binding, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"key-1", "key-2"} {
+		replay, err := store.Reserve(ctx, root, key, domain.NewProjectID())
+		if err != nil {
+			t.Fatalf("Reserve(%q) error = %v", key, err)
+		}
+		if replay.Project == nil || replay.Project.Identity.ProjectID != project.Identity.ProjectID {
+			t.Fatalf("Reserve(%q) project = %+v, want %q", key, replay.Project, project.Identity.ProjectID)
+		}
+	}
+	events, err := store.ListEvents(ctx, project.Identity.ProjectID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("events = %d, want 1", len(events))
+	}
+}
+
 func TestFinalizeRejectsMissingEventWithoutRepair(t *testing.T) {
 	ctx := context.Background()
 	store := newTestStore(t)
