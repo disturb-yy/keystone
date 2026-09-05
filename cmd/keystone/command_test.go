@@ -467,8 +467,8 @@ func TestRealCLIDaemonLifecycle(t *testing.T) {
 	if err := json.Unmarshal([]byte(startOutput), &startedStatus); err != nil {
 		t.Fatalf("decode real start output: %v", err)
 	}
-	if !startedStatus.DaemonReadiness || startedStatus.SchemaMigrationVersion != 1 {
-		t.Fatalf("real start status = %+v, want ready migration version 1", startedStatus)
+	if !startedStatus.DaemonReadiness || startedStatus.SchemaMigrationVersion != 2 {
+		t.Fatalf("real start status = %+v, want ready migration version 2", startedStatus)
 	}
 	if _, err := os.Stat(startedStatus.DatabasePath); err != nil {
 		t.Fatalf("real database stat error = %v", err)

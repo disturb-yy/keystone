@@ -73,7 +73,26 @@ func (c *daemonHTTPClient) stop(ctx context.Context, endpoint string, requestPay
 	return stopResponse, nil
 }
 
+func (c *daemonHTTPClient) init(ctx context.Context, endpoint, key string, payload controlplane.ProjectInitRequest) (controlplane.ProjectInitResponse, error) {
+	response, err := c.requestWithHeaders(ctx, http.MethodPost, endpoint, "/v1/projects/init", payload, map[string]string{controlplane.IdempotencyKeyHeader: key})
+	if err != nil {
+		return controlplane.ProjectInitResponse{}, err
+	}
+	if response.StatusCode != http.StatusOK {
+		return controlplane.ProjectInitResponse{}, c.protocolFailure(response, ErrorProjectInitFailed, "Project 初始化请求失败")
+	}
+	var result controlplane.ProjectInitResponse
+	if err := decodeJSONResponse(response, &result); err != nil {
+		return result, newCLIError(ErrorInvalidResponse, "Project 初始化 JSON 无效", err)
+	}
+	return result, nil
+}
+
 func (c *daemonHTTPClient) request(ctx context.Context, method, endpoint, path string, payload any) (*http.Response, error) {
+	return c.requestWithHeaders(ctx, method, endpoint, path, payload, nil)
+}
+
+func (c *daemonHTTPClient) requestWithHeaders(ctx context.Context, method, endpoint, path string, payload any, headers map[string]string) (*http.Response, error) {
 	if err := validateDaemonEndpoint(endpoint); err != nil {
 		return nil, newCLIError(ErrorMetadataInvalid, "Daemon endpoint 无效", err)
 	}
@@ -88,6 +107,9 @@ func (c *daemonHTTPClient) request(ctx context.Context, method, endpoint, path s
 		return nil, newCLIError(ErrorInvalidResponse, "创建 Daemon HTTP 请求失败", err)
 	}
 	request.Header.Set("Accept", "application/json")
+	for name, value := range headers {
+		request.Header.Set(name, value)
+	}
 	if payload != nil {
 		request.Header.Set("Content-Type", "application/json")
 	}
