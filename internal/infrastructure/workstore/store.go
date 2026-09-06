@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/disturb-yy/keystone/internal/infrastructure/id"
@@ -54,6 +55,7 @@ func Migrations() []migration.Migration {
 	return []migration.Migration{
 		{Version: 2, Name: "create_project_bootstrap", SQL: projectSchemaSQL},
 		changeMigration(),
+		workerMigration(),
 	}
 }
 
@@ -61,6 +63,9 @@ func Migrations() []migration.Migration {
 type Store struct {
 	db  *sql.DB
 	now func() time.Time
+
+	leaseMu     sync.RWMutex
+	leaseTokens map[string]string
 }
 
 // New 创建 SQLite adapter。
@@ -75,7 +80,7 @@ func New(db *sql.DB) (*Store, error) {
 	// 或单文件 SQLite 在多个连接并发写入时把可处理的版本冲突变成锁错误。
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
-	return &Store{db: db, now: time.Now}, nil
+	return &Store{db: db, now: time.Now, leaseTokens: make(map[string]string)}, nil
 }
 
 // Reserve 以幂等键或活动 root claim 取得可恢复 intent。

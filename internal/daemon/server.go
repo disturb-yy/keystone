@@ -42,6 +42,8 @@ type Options struct {
 	OnBooting func(*Server)
 	// ShutdownTimeout 覆盖优雅关闭 HTTP Server 的等待时长；零值使用默认值。
 	ShutdownTimeout time.Duration
+	// Worker 控制 readiness 后的独立 keystone-worker 监管；默认按 sibling/PATH 自动发现。
+	Worker WorkerSupervisorOptions
 }
 
 // Server 是 Daemon 的运行句柄，并拥有本次运行的本机状态、HTTP 和数据库资源。
@@ -49,22 +51,25 @@ type Server struct {
 	dataDir string
 	options Options
 
-	mu         sync.RWMutex
-	started    bool
-	paths      localstate.Paths
-	lock       *localstate.InstanceLock
-	db         *sql.DB
-	listener   net.Listener
-	httpServer *http.Server
-	serveErr   chan error
-	stopCh     chan struct{}
-	stopOnce   sync.Once
-	instanceID string
-	endpoint   string
-	startedAt  string
-	readiness  bool
-	projects   *work.Service
-	changes    *work.ChangeService
+	mu               sync.RWMutex
+	started          bool
+	paths            localstate.Paths
+	lock             *localstate.InstanceLock
+	db               *sql.DB
+	listener         net.Listener
+	httpServer       *http.Server
+	serveErr         chan error
+	stopCh           chan struct{}
+	stopOnce         sync.Once
+	instanceID       string
+	endpoint         string
+	startedAt        string
+	readiness        bool
+	projects         *work.Service
+	changes          *work.ChangeService
+	workerStore      *workstore.Store
+	artifacts        *artifact.Store
+	workerSupervisor *WorkerSupervisor
 }
 
 // New 创建尚未运行的 Daemon 句柄。路径、目录、锁和监听器均在 Run 中按固定顺序创建。
@@ -147,8 +152,31 @@ func (s *Server) Run(ctx context.Context) error {
 		return s.startupError(err)
 	}
 	s.setReadiness(true)
+	if err := s.startWorkerSupervisor(ctx); err != nil {
+		return s.startupError(fmt.Errorf("start worker supervisor: %w", err))
+	}
 
 	return s.waitForStop(ctx)
+}
+
+func (s *Server) startWorkerSupervisor(ctx context.Context) error {
+	s.mu.RLock()
+	endpoint, authority := s.endpoint, s.workerStore
+	s.mu.RUnlock()
+	options := s.options.Worker
+	options.Endpoint = endpoint
+	options.Store = authority
+	supervisor := NewWorkerSupervisor(options)
+	if err := supervisor.Start(ctx); err != nil {
+		if errors.Is(err, errWorkerExecutableUnavailable) {
+			return nil
+		}
+		return err
+	}
+	s.mu.Lock()
+	s.workerSupervisor = supervisor
+	s.mu.Unlock()
+	return nil
 }
 
 func (s *Server) markStarted() error {
@@ -248,6 +276,9 @@ func (s *Server) openAndMigrate(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("create project state adapter: %w", err)
 	}
+	if err := state.ReconcileWorkerRestart(ctx); err != nil {
+		return fmt.Errorf("reconcile worker state after daemon restart: %w", err)
+	}
 	projects, err := work.NewService(repository.Git{}, manifest.Store{}, state)
 	if err != nil {
 		return fmt.Errorf("create project application service: %w", err)
@@ -263,6 +294,8 @@ func (s *Server) openAndMigrate(ctx context.Context) error {
 	s.mu.Lock()
 	s.projects = projects
 	s.changes = changes
+	s.workerStore = state
+	s.artifacts = artifactStore
 	s.mu.Unlock()
 	return nil
 }
@@ -323,19 +356,28 @@ func (s *Server) shutdownResources() error {
 	paths := s.paths
 	instanceID := s.instanceID
 	lock := s.lock
+	workerSupervisor := s.workerSupervisor
 	s.httpServer = nil
 	s.listener = nil
 	s.db = nil
 	s.projects = nil
 	s.changes = nil
+	s.workerStore = nil
+	s.artifacts = nil
+	s.workerSupervisor = nil
 	s.lock = nil
 	s.readiness = false
 	s.mu.Unlock()
 
 	var shutdownErr error
+	if workerSupervisor != nil {
+		workerContext, cancel := context.WithTimeout(context.Background(), s.options.ShutdownTimeout)
+		shutdownErr = workerSupervisor.Stop(workerContext)
+		cancel()
+	}
 	if server != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), s.options.ShutdownTimeout)
-		shutdownErr = server.Shutdown(ctx)
+		shutdownErr = errors.Join(shutdownErr, server.Shutdown(ctx))
 		cancel()
 	}
 	closeErr := closeDatabase(db)
@@ -378,6 +420,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("/v1/projects/", s.handleProjectRoute)
 	mux.HandleFunc("/v1/changes", s.handleChangesRoot)
 	mux.HandleFunc("/v1/changes/", s.handleChangeRoute)
+	mux.HandleFunc("/worker/v1/", s.handleWorkerRoute)
 	return mux
 }
 

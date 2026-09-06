@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"bytes"
 	"encoding/json"
 	"reflect"
 	"testing"
@@ -132,5 +133,43 @@ func TestJSONUnmarshalMinimumPayloads(t *testing.T) {
 				t.Fatalf("json.Unmarshal() = %#v, want %#v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestDecodeStrictRejectsAmbiguousPayloads(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{name: "unknown field", input: `{"worker_id":"worker-1","protocol_version":"v1","capabilities":[],"extra":true}`},
+		{name: "duplicate field", input: `{"worker_id":"worker-1","worker_id":"worker-2","protocol_version":"v1","capabilities":[]}`},
+		{name: "multiple values", input: `{"worker_id":"worker-1","protocol_version":"v1","capabilities":[]} {}`},
+		{name: "array", input: `[]`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var request Register
+			if err := DecodeStrict([]byte(tt.input), &request); err == nil {
+				t.Fatal("DecodeStrict() accepted an invalid payload")
+			}
+		})
+	}
+}
+
+func TestDecodeStrictRejectsOversizedBody(t *testing.T) {
+	body := bytes.Repeat([]byte("x"), MaxBodyBytes+1)
+	var request Register
+	if err := DecodeStrict(body, &request); err == nil {
+		t.Fatal("DecodeStrict() accepted an oversized payload")
+	}
+}
+
+func TestPullResponseUsesNullForEmptyAssignment(t *testing.T) {
+	encoded, err := json.Marshal(PullResponse{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(encoded) != `{"assignment":null}` {
+		t.Fatalf("PullResponse JSON = %s, want {\"assignment\":null}", encoded)
 	}
 }

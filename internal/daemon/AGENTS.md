@@ -10,5 +10,9 @@
   Application 及其 ports 完成。
 - Change Handler 只做严格 JSON/路径校验、DTO 转换和稳定错误映射；Change、Artifact、
   AgentRun、HumanDecision 和 Event 业务通过 `internal/work` Application 完成。
-- stop 命令不依赖数据库；关闭顺序必须是 HTTP Server、数据库、元数据、锁。
+- Worker Handler 只接受 loopback、严格 JSON 和当前 Bearer secret，随后调用 `workstore`
+  的 Worker authority；它不在 Handler 中写 SQL、落 Artifact 或推进 AgentRun。
+- Worker Supervisor 在 readiness 后监管最多一个独立 `keystone-worker`；secret 只通过 stdin
+  启动管道传递，Worker 缺失不会伪造 Daemon not-ready。
+- stop 命令不依赖数据库；关闭顺序必须是 Worker Supervisor、HTTP Server、数据库、元数据、锁。
 - 注释使用中文，技术标识符保持原样。

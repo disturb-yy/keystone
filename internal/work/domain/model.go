@@ -56,6 +56,7 @@ const (
 	ChangeHumanRequiredType   = "ChangeHumanRequired"
 	HumanDecisionRecordedType = "HumanDecisionRecorded"
 	ChangeCancelledType       = "ChangeCancelled"
+	AgentRunReportLateType    = "AgentRunReportLate"
 
 	// ArtifactRole 是 ArtifactRef 在 Change Trace 中的稳定角色。
 	ArtifactRoleChangeIntent = "change_intent"
