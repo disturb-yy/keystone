@@ -196,6 +196,34 @@ _避免_：ChangeStatus、Worker lease、执行进程退出信号
 AgentRun 在读取模型中的执行状态；M3 只使用 running 与 completed，且 completed 必有 AgentRunOutcome 与 completed_at，running 的 outcome 与 completed_at 均为空。
 _避免_：ChangeStatus、AgentRunOutcome、Worker 进程存活探针
 
+**WorkerInstance**：
+由 Daemon 监管的本机副作用执行进程实例；它在一次进程生命周期内拥有独立的 Worker 身份、协议凭据和可用性事实，不拥有 Change 或 Ticket 权威状态。
+_避免_：DaemonInstance、AgentRun、WorkerPool
+
+**WorkerProtocol**：
+Daemon 与 Worker 之间用于注册、心跳、领取 Assignment 和提交 Report 的窄执行边界；它只传递执行所需的授权与结果，不承载 Control Plane 的生命周期命令。
+_避免_：Control Plane API、应用日志、数据库接口
+
+**Assignment**：
+Daemon 将一个已授权的执行机会交给 WorkerInstance 的业务关联，绑定一个 AgentRun 和一次执行权；Assignment 不是可被多个 Worker 复用的任务槽。
+_避免_：Ticket、Change、可复用任务槽
+
+**Lease**：
+Assignment 在有限时间内有效且只允许一个执行者提交首次终态的执行授权；Lease 失效后，结果最多进入 Trace，不能恢复已被 Daemon 形成的权威事实。
+_避免_：InstanceLock、ChangeVersion、lease token
+
+**RuntimeAdapter**：
+将 Assignment 的受限运行输入转换为具体 Runtime 执行结果的边界能力，使 Worker 不依赖某一种 Runtime 的命令细节；V1 首先实现 Codex Adapter，并保留 OpenCode 的接口位置。
+_避免_：WorkerInstance、RuntimeMetadata、LifecycleCoordinator
+
+**ExecutionGuard**：
+限制 Runtime 执行边界并检查执行前后不变量的治理事实；V1 通过可验证的命令、环境和 Git 状态约束降低越界风险，但不等同于完整的操作系统沙箱。
+_避免_：Prompt 禁令、InstanceLock、完整沙箱
+
+**LateReport**：
+Worker 已通过协议鉴权但不再具备改变权威 AgentRun 或 Change 资格的执行结果；它可以连同 Artifact 保留为 Trace，但不能推进生命周期或恢复已取消的 Change。
+_避免_：Worker 自报状态、重试命令、ChangeStatus
+
 **HumanDecision**：
 对 human_required Change 追加的人工恢复事实；M3 只允许 retry 或 cancel，Daemon 解释其合法动作，Client 不直接指定 LifecycleStage 或 ChangeStatus。
 _避免_：状态字段覆盖、可编辑备注、Worker Report
