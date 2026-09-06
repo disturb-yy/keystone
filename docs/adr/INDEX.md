@@ -37,3 +37,6 @@
 | [0023](./0023-work-owns-business-persistence-daemon-composes.md) | Work 拥有业务持久化，Daemon 负责组合 | 已接受 |
 | [0024](./0024-change-receipt-replays-first-success-response.md) | Change Receipt 重放首次成功响应 | 已接受 |
 | [0025](./0025-sqlite-enforces-work-invariants.md) | SQLite 执行 Work 的关键不变量 | 已接受 |
+| [0026](./0026-worker-pull-and-process-authentication.md) | Worker Pull 与进程级协议鉴权 | 已接受 |
+| [0027](./0027-lease-fenced-report-and-evidence-commit.md) | Lease 围栏、Report 幂等与证据提交 | 已接受 |
+| [0028](./0028-runtime-guard-without-full-sandbox.md) | Runtime Guard 的有限保证边界 | 已接受 |
