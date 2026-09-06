@@ -18,6 +18,7 @@ const (
 	ErrorDaemonStartFailed   ErrorCategory = "daemon_start_failed"
 	ErrorDaemonStartTimeout  ErrorCategory = "daemon_start_timeout"
 	ErrorProjectInitFailed   ErrorCategory = "project_init_failed"
+	ErrorChangeFailed        ErrorCategory = "change_operation_failed"
 )
 
 // CLIError 表示 CLI 已分类的用户可诊断错误，并保留底层错误链供测试或调用方检查。

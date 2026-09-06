@@ -3,7 +3,7 @@
 ## 职责
 
 本 package 只定义 CLI、Dashboard 与 Control Plane Daemon 之间的 HTTP/JSON
-传输边界。当前范围是 `/v1` 版本前缀、Daemon/Project 强类型 DTO、结构化错误
+传输边界。当前范围是 `/v1` 版本前缀、Daemon/Project/Change 强类型 DTO、结构化错误
 envelope 和 `Idempotency-Key` 的非空不透明值表达。
 
 ## 依赖与边界
@@ -11,7 +11,7 @@ envelope 和 `Idempotency-Key` 的非空不透明值表达。
 - 只依赖 Go 标准库。
 - 不导入 Domain、Application、Infrastructure、SQLite 或具体 Daemon 实现。
 - 不实现 HTTP Handler、路由、状态码、Daemon 生命周期、Command 或 Query。
-- DTO 只表达边界字段，不使用通用 `data` wrapper 或无约束 `details` map。
+- DTO 只表达边界字段，不使用通用 `data` wrapper 或无约束 `details` map；Change DTO 不暴露物理 Artifact 路径。
 
 ## 修改与验证
 

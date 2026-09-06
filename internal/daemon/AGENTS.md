@@ -8,5 +8,7 @@
   `internal/infrastructure/workstore` 的 Project Bootstrap Migration。
 - Project Handler 只做 DTO 解码、边界校验和错误映射；Project 业务通过 `internal/work`
   Application 及其 ports 完成。
+- Change Handler 只做严格 JSON/路径校验、DTO 转换和稳定错误映射；Change、Artifact、
+  AgentRun、HumanDecision 和 Event 业务通过 `internal/work` Application 完成。
 - stop 命令不依赖数据库；关闭顺序必须是 HTTP Server、数据库、元数据、锁。
 - 注释使用中文，技术标识符保持原样。

@@ -17,15 +17,15 @@
 | `Makefile` | `test`、`build`、`lint`、`dashboard-build` 根级验证入口 | 已存在；Dashboard 目标使用 `package-lock.json` 执行 npm 校验/构建 |
 | `docs/FE20260903080401/` | V1 基线、里程碑、验收清单和版本化 Ticket/规格文档 | 已存在；Ticket 02 的 spec 与 01-05 验收记录已在当前树 |
 | `CONTEXT.md`、`docs/adr/` | 项目术语与已接受的架构决策 | 已存在；记录 LocalStateRoot、DaemonReadiness 等语义及本机 Daemon 控制边界，不表示 M1 已实现 |
-| `cmd/`、`configs/` | `cmd/keystone`、`cmd/keystone-daemon`、`cmd/keystone-worker` 与 `configs` 的 `.gitkeep` | `keystone init`、Daemon 入口已实现；Worker 仍无运行实现 |
-| `internal/infrastructure/` | 基础能力及 `manifest`、`repository`、`workstore` 三个 Ticket 04 adapter | 已有本机状态、Migration、Git/Manifest 和 Project SQLite 持久化能力 |
-| `contracts/controlplane/` | `/v1` 版本前缀、错误 envelope、Daemon/Project DTO、`Idempotency-Key` 表达 | 已落地 JSON Contract package；HTTP Handler 位于 `internal/daemon` |
+| `cmd/`、`configs/` | `cmd/keystone`、`cmd/keystone-daemon` 与 `configs` 的 `.gitkeep` | `init`、Change 和 Daemon CLI 已实现；Worker 仍无运行实现 |
+| `internal/infrastructure/` | 基础能力及 `manifest`、`repository`、`artifact`、`workstore` adapter | 已有本机状态、Migration、Git/Manifest、Artifact 和 Project/Change SQLite 持久化能力 |
+| `contracts/controlplane/` | `/v1` 版本前缀、错误 envelope、Daemon/Project/Change DTO、`Idempotency-Key` 表达 | 已落地 JSON Contract package；HTTP Handler 位于 `internal/daemon` |
 | `contracts/worker/` | `Register`、`Heartbeat`、`Assignment`、`Report` 传输 DTO | 已落地独立 JSON Contract package，无 Worker runtime |
 | `docs/architecture-baseline/` | 架构参考目录 | 当前工作树不存在；目标架构文字不作为运行行为证据 |
 | `dashboard/` | React、TypeScript、Vite 源码、`package.json` 与 `package-lock.json` | 已有可构建骨架，无业务页面 |
-| `migrations/`、`scripts/` | 根级路径尚不存在 | Migration runner 位于 `internal/infrastructure/migration/`；Ticket 04 业务 Migration 由 `workstore` 提供 |
+| `migrations/`、`scripts/` | 根级路径尚不存在 | Migration runner 位于 `internal/infrastructure/migration/`；Ticket 04/05 业务 Migration 由 `workstore` 提供 |
 
-当前工作树已有基础 `.go`、Ticket 02 基础设施、Ticket 04 Project Bootstrap、Contract 测试以及 Dashboard 前端源码；Worker runtime 和后续业务领域仍未实现。`.agents/`、`.codex/` 和 `.idea/` 属于工作区或 IDE 工具目录，不纳入项目架构导航。
+当前工作树已有基础 `.go`、Ticket 02 基础设施、Ticket 04 Project Bootstrap、Ticket 05 Change Lifecycle/Artifact/Event、Contract 测试以及 Dashboard 前端源码；Worker runtime、Ticket Graph 和后续执行领域仍未实现。`.agents/`、`.codex/` 和 `.idea/` 属于工作区或 IDE 工具目录，不纳入项目架构导航。
 
 ## Architecture Map
 
@@ -58,19 +58,19 @@ Human
 
 | 路径 | 地图位置 | 当前状态 |
 | --- | --- | --- |
-| `cmd/` | CLI、Daemon、Worker 入口边界 | `cmd/keystone` 已提供 `init` 和 Daemon 生命周期命令；Worker 仍无运行实现 |
+| `cmd/` | CLI、Daemon、Worker 入口边界 | `cmd/keystone` 已提供 `init`、Change 和 Daemon 生命周期命令；Worker 仍无运行实现 |
 | `dashboard/` | Local Web UI Client | 已有 React/TypeScript/Vite 骨架与锁文件 |
 
 ### L2 — Contract
 
 | 路径 | 连接对象 | 当前状态 |
 | --- | --- | --- |
-| `contracts/controlplane/` | CLI / Dashboard ↔ Daemon 的 Control Plane API | 已落地 `/v1` Daemon 与 Project DTO；路由位于 `internal/daemon` |
+| `contracts/controlplane/` | CLI / Dashboard ↔ Daemon 的 Control Plane API | 已落地 `/v1` Daemon、Project 与 Change DTO；路由位于 `internal/daemon` |
 | `contracts/worker/` | Daemon ↔ Worker 的 Narrow Worker Protocol | 已落地四组 DTO；Worker 进程和协议处理尚未实现 |
 
 ### L3 — Application
 
-Application 位于 Control Plane Daemon 内部；Ticket 04 的 Project Bootstrap Application 位于 `internal/work/`。架构参考中的协调节点包括：
+Application 位于 Control Plane Daemon 内部；Ticket 04 Project Bootstrap 和 Ticket 05 Change Lifecycle Application 位于 `internal/work/`。架构参考中的协调节点包括：
 
 - Lifecycle Coordinator：推进 Change 的宏观 Lifecycle Stage。
 - Scheduler：从 Effective Ticket Graph 的 READY Frontier 选择 Runnable Work。
@@ -81,12 +81,11 @@ Application 位于 Control Plane Daemon 内部；Ticket 04 的 Project Bootstrap
 
 ### L4 — Domain
 
-业务领域以 DDD Lite 组织，`domain/` 是业务强边界。当前只有 Ticket 04 所需的
-`internal/work/` 与 `internal/work/domain/` 已创建；其他目标领域目录仍未创建：
+业务领域以 DDD Lite 组织，`domain/` 是业务强边界。当前只有 Ticket 04/05 所需的 `internal/work/` 与 `internal/work/domain/` 已创建；其他目标领域目录仍未创建：
 
 | 目标路径 | 逻辑子系统 | 地图中的核心对象 |
 | --- | --- | --- |
-| `internal/work/`、`internal/work/domain/` | Work & Lifecycle | 当前已创建；Ticket 04 的 Project Bootstrap Domain 与 Application |
+| `internal/work/`、`internal/work/domain/` | Work & Lifecycle | 当前已创建；Project Bootstrap、Change Lifecycle、Artifact/Event Domain 与 Application |
 | `internal/planning/` | Intelligence & Planning | 尚未创建；Understanding、Context、Design、Plan、Ticket Generation |
 | `internal/governance/` | Governance | 尚未创建；Policy、Risk、Gate、Evidence、Decision、Escalation |
 | `internal/execution/` | Orchestration & Execution | 尚未创建；Frontier、Scheduler、Execution DAG、Assignment、Recovery Coordination |
@@ -102,10 +101,10 @@ Intent → Understand → Design → Plan → Ticketize → Execute → Verify �
 
 | 目标路径 | 地图位置 | 当前状态 |
 | --- | --- | --- |
-| `internal/infrastructure/` | `config`、`logging`、`id`、`localstate`、`migration`、`manifest`、`repository`、`workstore` | 基础能力、Git/Manifest adapter 和 Project Bootstrap SQLite adapter |
+| `internal/infrastructure/` | `config`、`logging`、`id`、`localstate`、`migration`、`manifest`、`repository`、`artifact`、`workstore` | 基础能力、Git/Manifest、Artifact store 和 Project/Change SQLite adapter |
 | `internal/infrastructure/localstate/` | 数据根、目录初始化、跨平台单实例锁和运行元数据 | 已落地；不拥有 Daemon 生命周期或业务状态 |
 | `internal/infrastructure/migration/` | 纯 Go SQLite `t_schema_migrations` runner | 已落地；只增量、事务应用、重复跳过和漂移失败 |
-| `migrations/` | 根级数据库 Schema / Migration 文件 | 当前未创建；Ticket 04 业务 Migration 由 `internal/infrastructure/workstore` 提供 |
+| `migrations/` | 根级数据库 Schema / Migration 文件 | 当前未创建；Ticket 04/05 业务 Migration 由 `internal/infrastructure/workstore` 提供 |
 | `configs/` | 运行配置和默认配置 | 只有 `.gitkeep` |
 
 Infrastructure 是 Control Plane 的基础设施适配区域。具体依赖和实现规则见 `AGENTS.md` 的 Infrastructure Rules。
@@ -147,9 +146,9 @@ Daemon → contracts/worker → Worker
 | CLI 入口 | `cmd/keystone/` | L2 `contracts/controlplane/`、L3 Application |
 | Daemon 入口 | `cmd/keystone-daemon/` | L2 Contract、L3 Application、L5 Infrastructure |
 | Worker 入口 | `cmd/keystone-worker/` | L2 `contracts/worker/`、Workspace、Runtime |
-| 领域对象 | `internal/work/domain/` | Ticket 04 Project Bootstrap Domain |
-| 用例编排 | `internal/work/` | Ticket 04 Project Bootstrap Application |
-| 持久化或外部适配 | `internal/infrastructure/` | L5 Infrastructure、`migrations/` |
+| 领域对象 | `internal/work/domain/` | Project Bootstrap、Change Lifecycle、Artifact/Event Domain |
+| 用例编排 | `internal/work/` | Project Bootstrap、Change Lifecycle Application |
+| 持久化或外部适配 | `internal/infrastructure/` | Git/Manifest、Artifact store、Project/Change workstore、`migrations/` |
 | Ticket 02 实现 | `docs/FE20260903080401/tickets/02-local-state-and-boundary-contracts/` | spec、子 Ticket、localstate/migration/Contract 实现与验收记录 |
 | 运行术语与长期决策 | `CONTEXT.md`、`docs/adr/` | 术语消歧与已接受的本机 Daemon 控制边界 |
 
@@ -163,12 +162,12 @@ Daemon → contracts/worker → Worker
 - 运行术语与已接受决策：`CONTEXT.md`、`docs/adr/0001-local-daemon-control-plane.md`。
 - Ticket 02 规格：`docs/FE20260903080401/tickets/02-local-state-and-boundary-contracts/spec/02-local-state-and-boundary-contracts-spec.md` 及其父 Ticket/子 Ticket。
 - Graphify 输出、CodeMap 输出和 MCP 代码地图：当前未发现。
-- 当前已有 Ticket 03 基础 package，以及 Ticket 04 的 `internal/work`、`internal/work/domain`、`internal/infrastructure/manifest`、`repository`、`workstore` 和 Project HTTP/CLI 链路源码。
+- 当前已有 Ticket 03 基础 package、Ticket 04 Project Bootstrap 和 Ticket 05 Change Lifecycle/Artifact/Event 的 `internal/work`、`internal/work/domain`、`internal/infrastructure/{manifest,repository,artifact,workstore}`、Control Plane Contract、Daemon HTTP 与 CLI 链路源码。
 
 ## Freshness
 
-- 生成日期：`2026-09-04`。
+- 生成日期：`2026-09-06`。
 - Graphify 输出、CodeMap 输出和 MCP 代码地图：当前未发现。
-- `CONTEXT.md` 与 `docs/adr/0001-local-daemon-control-plane.md` 已记录 Ticket 03 对齐结论；它们不改变 Daemon、HTTP API 或 CLI 尚未实现的事实。
-- `Makefile` 提供根级验证入口；`dashboard/`、`contracts/{controlplane,worker}/`、Daemon、Project HTTP/CLI 链路与 `internal/infrastructure/{config,logging,id,localstate,migration,manifest,repository,workstore}/` 已落地。`migrations/`、`scripts/` 和 Worker runtime 尚未创建。
+- `CONTEXT.md` 与 `docs/adr/0001-local-daemon-control-plane.md` 记录本机 Daemon 控制边界；Ticket 04/05 的实际代码以当前 checkout 为准。
+- `Makefile` 提供根级验证入口；`dashboard/`、`contracts/{controlplane,worker}/`、Daemon、Project/Change HTTP/CLI 链路与 `internal/infrastructure/{config,logging,id,localstate,migration,manifest,repository,artifact,workstore}/` 已落地。`migrations/`、`scripts/` 和 Worker runtime 尚未创建。
 - 新增实现、创建目标目录或刷新架构 / 代码地图后，本索引需要重新对齐。

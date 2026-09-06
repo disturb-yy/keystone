@@ -2,7 +2,7 @@
 
 ## 当前状态
 
-该目录当前包含八个可编译、可测试的基础能力 package：
+该目录当前包含九个可编译、可测试的基础能力 package：
 
 | 路径 | 当前职责 | 主要入口 |
 | --- | --- | --- |
@@ -13,7 +13,8 @@
 | `migration/` | 使用纯 Go SQLite driver 执行 `t_schema_migrations` 增量 Migration | `migration.NewRunner`、`Runner.Apply`、`migration.DefaultMigrations` |
 | `manifest/` | 严格读取、原子创建和解析 ProjectManifest V1 | `manifest.Store.Ensure` |
 | `repository/` | 只读识别 Git root、拓扑和旧 root 可验证性 | `repository.Git.Discover`、`Git.RootExists` |
-| `workstore/` | Project Bootstrap SQLite Migration、intent、receipt、Project 和 Event | `workstore.New`、`Store.Reserve`、`Store.Finalize` |
+| `artifact/` | Change Artifact 原子内容写入、摘要复用和校验读取 | `artifact.New`、`Store.Put`、`Store.Read` |
+| `workstore/` | Project/Change SQLite Migration、状态、Event、ArtifactRef、AgentRun、Decision 和 Receipt | `workstore.New`、`Store.CreateChange` |
 
 每个 package 都有局部 `AGENTS.md`、`INDEX.md`、Go 源码和聚焦单测。
 
@@ -25,7 +26,7 @@ logging → io、log/slog
 id      → uuid（Go 1.27 标准库）
 ```
 
-`config`、`logging`、`id` 之间没有代码依赖；`localstate` 只依赖操作系统文件能力和平台锁原语，`migration` 只依赖 `database/sql` 与纯 Go SQLite driver；`manifest`、`repository` 和 `workstore` 依赖 Work Domain/端口模型以实现 Ticket 04 adapter。基础能力不访问 HTTP 或其他进程。
+`config`、`logging`、`id` 之间没有代码依赖；`localstate` 只依赖操作系统文件能力和平台锁原语，`migration` 只依赖 `database/sql` 与纯 Go SQLite driver；`manifest`、`repository`、`artifact` 和 `workstore` 依赖 Work Domain/端口模型以实现 Ticket 04/05 adapter。基础能力不访问 HTTP 或其他进程。
 
 ## 验证入口
 

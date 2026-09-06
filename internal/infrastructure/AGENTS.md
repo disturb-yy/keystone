@@ -2,7 +2,7 @@
 
 ## 边界
 
-`internal/infrastructure/` 当前承载八个职责明确的跨领域基础能力：
+`internal/infrastructure/` 当前承载九个职责明确的跨领域基础能力：
 
 - `config/` 读取并解析 `KEYSTONE_LOG_LEVEL` 环境变量。
 - `logging/` 创建由调用者指定输出目标和等级的 JSON 结构化 logger。
@@ -11,7 +11,8 @@
 - `migration/` 使用纯 Go `modernc.org/sqlite` 在调用方连接上执行 `t_schema_migrations` 增量 Migration。
 - `manifest/` 严格读写 ProjectManifest V1，并以临时文件原子发布缺失 Manifest。
 - `repository/` 只读识别 Git Repository root 与旧 binding 拓扑。
-- `workstore/` 持有 Work 领域 Project Bootstrap 的 SQLite Migration、状态和回执适配。
+- `artifact/` 以摘要身份原子写入并校验 Change Artifact 内容。
+- `workstore/` 持有 Work 领域 Project/Change SQLite Migration、状态和回执适配。
 
 这些 package 不承载领域语义、Daemon 生命周期、Worker 监管、业务 Schema 或进程协议。`localstate` 和 `migration` 是 Ticket 02 的本机边界基础设施；它们不拥有调用方的数据库连接或单实例锁生命周期。
 

@@ -9,6 +9,7 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -84,6 +85,81 @@ func (c *daemonHTTPClient) init(ctx context.Context, endpoint, key string, paylo
 	var result controlplane.ProjectInitResponse
 	if err := decodeJSONResponse(response, &result); err != nil {
 		return result, newCLIError(ErrorInvalidResponse, "Project 初始化 JSON 无效", err)
+	}
+	return result, nil
+}
+
+func (c *daemonHTTPClient) changeCreate(ctx context.Context, endpoint, key string, payload controlplane.ChangeCreateRequest) (controlplane.ChangeCreateResponse, error) {
+	response, err := c.requestWithHeaders(ctx, http.MethodPost, endpoint, "/v1/changes", payload, map[string]string{controlplane.IdempotencyKeyHeader: key})
+	if err != nil {
+		return controlplane.ChangeCreateResponse{}, err
+	}
+	if response.StatusCode != http.StatusCreated {
+		return controlplane.ChangeCreateResponse{}, c.protocolFailure(response, ErrorChangeFailed, "Change 创建请求失败")
+	}
+	var result controlplane.ChangeCreateResponse
+	if err := decodeJSONResponse(response, &result); err != nil {
+		return controlplane.ChangeCreateResponse{}, newCLIError(ErrorInvalidResponse, "Change 创建 JSON 无效", err)
+	}
+	return result, nil
+}
+
+func (c *daemonHTTPClient) changeList(ctx context.Context, endpoint, repositoryPath string) (controlplane.ChangeListResponse, error) {
+	response, err := c.request(ctx, http.MethodGet, endpoint, "/v1/changes?repository_path="+url.QueryEscape(repositoryPath), nil)
+	if err != nil {
+		return controlplane.ChangeListResponse{}, err
+	}
+	if response.StatusCode != http.StatusOK {
+		return controlplane.ChangeListResponse{}, c.protocolFailure(response, ErrorChangeFailed, "Change 列表请求失败")
+	}
+	var result controlplane.ChangeListResponse
+	if err := decodeJSONResponse(response, &result); err != nil {
+		return controlplane.ChangeListResponse{}, newCLIError(ErrorInvalidResponse, "Change 列表 JSON 无效", err)
+	}
+	return result, nil
+}
+
+func (c *daemonHTTPClient) changeShow(ctx context.Context, endpoint string, changeID string) (controlplane.ChangeCommandResponse, error) {
+	response, err := c.request(ctx, http.MethodGet, endpoint, "/v1/changes/"+url.PathEscape(changeID), nil)
+	if err != nil {
+		return controlplane.ChangeCommandResponse{}, err
+	}
+	if response.StatusCode != http.StatusOK {
+		return controlplane.ChangeCommandResponse{}, c.protocolFailure(response, ErrorChangeFailed, "Change 查询请求失败")
+	}
+	var result controlplane.ChangeCommandResponse
+	if err := decodeJSONResponse(response, &result); err != nil {
+		return controlplane.ChangeCommandResponse{}, newCLIError(ErrorInvalidResponse, "Change 查询 JSON 无效", err)
+	}
+	return result, nil
+}
+
+func (c *daemonHTTPClient) changeCommand(ctx context.Context, endpoint, key, changeID string, payload controlplane.ChangeCommandRequest) (controlplane.ChangeCommandResponse, error) {
+	response, err := c.requestWithHeaders(ctx, http.MethodPost, endpoint, "/v1/changes/"+url.PathEscape(changeID)+"/commands", payload, map[string]string{controlplane.IdempotencyKeyHeader: key})
+	if err != nil {
+		return controlplane.ChangeCommandResponse{}, err
+	}
+	if response.StatusCode != http.StatusOK {
+		return controlplane.ChangeCommandResponse{}, c.protocolFailure(response, ErrorChangeFailed, "Change 控制请求失败")
+	}
+	var result controlplane.ChangeCommandResponse
+	if err := decodeJSONResponse(response, &result); err != nil {
+		return controlplane.ChangeCommandResponse{}, newCLIError(ErrorInvalidResponse, "Change 控制 JSON 无效", err)
+	}
+	return result, nil
+}
+
+func (c *daemonHTTPClient) changeDecision(ctx context.Context, endpoint, key, changeID string, payload controlplane.HumanDecisionRequest) (controlplane.HumanDecisionResponse, error) {
+	response, err := c.requestWithHeaders(ctx, http.MethodPost, endpoint, "/v1/changes/"+url.PathEscape(changeID)+"/decisions", payload, map[string]string{controlplane.IdempotencyKeyHeader: key})
+	if err != nil {
+		return controlplane.HumanDecisionResponse{}, err
+	}
+	if response.StatusCode != http.StatusOK {
+		return controlplane.HumanDecisionResponse{}, c.protocolFailure(response, ErrorChangeFailed, "Change 决策请求失败")
+	}
+	var result controlplane.HumanDecisionResponse
+	if err := decodeJSONResponse(response, &result); err != nil {
+		return controlplane.HumanDecisionResponse{}, newCLIError(ErrorInvalidResponse, "Change 决策 JSON 无效", err)
 	}
 	return result, nil
 }

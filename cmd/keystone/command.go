@@ -119,6 +119,7 @@ func NewRootCommand(deps Dependencies) *cobra.Command {
 	root.PersistentFlags().StringVar(&app.dataDir, "data-dir", "", "Keystone local state root")
 	root.PersistentPreRunE = app.prepare
 	root.AddCommand(app.newInitCommand())
+	root.AddCommand(app.newChangeCommand())
 	daemon := app.newDaemonCommand()
 	root.AddCommand(daemon)
 	return root

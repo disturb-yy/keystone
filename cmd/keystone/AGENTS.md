@@ -10,6 +10,8 @@
 - 在 `start` 中发现并启动独立的 `keystone-daemon`，在有界时间内确认 readiness。
 - 在 `init` 中归一化当前目录、复用 Daemon ensure seam，并通过 loopback API
   提交 Project 初始化；CLI 不读取 Manifest 或 SQLite。
+- 通过 Control Plane API 暴露 Change create/list/show/pause/resume/cancel 和
+  `decide retry|cancel`；Change 写命令共用 Daemon ensure seam，纯查询只发现已有 Daemon。
 
 该 package 不打开 SQLite、不获取或判断 `InstanceLock`、不按 PID 控制进程，
 也不实现 Daemon HTTP Handler。`status` 与 `stop` 不得启动子进程；只有
@@ -21,7 +23,7 @@
 修改后至少运行：
 
 ```bash
-GOCACHE=/tmp/keystone-ticket-03-go-cache go test ./cmd/keystone -count=1
-GOCACHE=/tmp/keystone-ticket-03-go-cache go test ./... -count=1
-GOCACHE=/tmp/keystone-ticket-03-go-cache go vet ./...
+GOCACHE=/tmp/keystone-ticket-05-go-cache go test ./cmd/keystone -count=1
+GOCACHE=/tmp/keystone-ticket-05-go-cache go test ./... -count=1
+GOCACHE=/tmp/keystone-ticket-05-go-cache go vet ./...
 ```

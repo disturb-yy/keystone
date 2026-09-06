@@ -19,6 +19,9 @@ func newTestStore(t *testing.T) *Store {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
+	if _, err := db.Exec(`PRAGMA foreign_keys = ON`); err != nil {
+		t.Fatal(err)
+	}
 	migrations := append(migration.DefaultMigrations(), Migrations()...)
 	if err := migration.NewRunner(migrations).Apply(context.Background(), db); err != nil {
 		t.Fatal(err)
@@ -201,6 +204,9 @@ func TestFinalizeRejectsMissingEventWithoutRepair(t *testing.T) {
 	}
 	binding := domain.RepositoryBinding{Root: root, ManifestPath: root + "/.keystone/project.yaml"}
 	if _, err := store.Finalize(ctx, "key", first.Intent, domain.ProjectManifest{Version: 1, ProjectID: first.Intent.ProjectID}, binding, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec(`DROP TRIGGER tr_change_events_no_delete`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.db.Exec(`DELETE FROM t_project_events WHERE project_id = ?`, first.Intent.ProjectID); err != nil {

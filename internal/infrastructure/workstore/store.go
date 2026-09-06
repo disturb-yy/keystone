@@ -51,7 +51,10 @@ CREATE TABLE t_project_initialization_receipts (
 
 // Migrations 返回 Work 领域拥有的业务 Migration。
 func Migrations() []migration.Migration {
-	return []migration.Migration{{Version: 2, Name: "create_project_bootstrap", SQL: projectSchemaSQL}}
+	return []migration.Migration{
+		{Version: 2, Name: "create_project_bootstrap", SQL: projectSchemaSQL},
+		changeMigration(),
+	}
 }
 
 // Store 是 Project Bootstrap 的 SQLite 状态端口实现。
@@ -65,6 +68,13 @@ func New(db *sql.DB) (*Store, error) {
 	if db == nil {
 		return nil, errors.New("create work store: nil database")
 	}
+	if _, err := db.Exec(`PRAGMA foreign_keys = ON`); err != nil {
+		return nil, fmt.Errorf("enable work store foreign keys: %w", err)
+	}
+	// Change 事务需要在同一连接上观察并条件更新 Version，避免本机内存库
+	// 或单文件 SQLite 在多个连接并发写入时把可处理的版本冲突变成锁错误。
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
 	return &Store{db: db, now: time.Now}, nil
 }
 
@@ -243,7 +253,7 @@ func (s *Store) Finalize(ctx context.Context, key string, intent domain.ProjectI
 			return project, fmt.Errorf("insert project: %w", err)
 		}
 		event := domain.ProjectInitialized{EventID: id.New(), ProjectID: manifest.ProjectID, OccurredAt: created}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO t_project_events (event_id, project_id, type, occurred_at) VALUES (?, ?, ?, ?)`, event.EventID, event.ProjectID, domain.ProjectInitializedType, event.OccurredAt.Format(time.RFC3339Nano)); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO t_project_events (event_id, project_id, type, occurred_at, event_sequence, actor) VALUES (?, ?, ?, ?, 1, '')`, event.EventID, event.ProjectID, domain.ProjectInitializedType, event.OccurredAt.Format(time.RFC3339Nano)); err != nil {
 			return project, fmt.Errorf("insert project initialized event: %w", err)
 		}
 	} else {
@@ -337,7 +347,7 @@ func (s *Store) ListEvents(ctx context.Context, projectID domain.ProjectID) ([]d
 	if _, err := readProject(ctx, s.db, projectID); err != nil {
 		return nil, err
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT event_id, project_id, type, occurred_at FROM t_project_events WHERE project_id = ? ORDER BY occurred_at, event_id`, projectID)
+	rows, err := s.db.QueryContext(ctx, `SELECT event_id, project_id, type, occurred_at FROM t_project_events WHERE project_id = ? AND change_id IS NULL ORDER BY occurred_at, event_id`, projectID)
 	if err != nil {
 		return nil, fmt.Errorf("query project events: %w", err)
 	}
@@ -446,7 +456,7 @@ func readReceipt(ctx context.Context, queryer interface {
 }
 
 func validateProjectEvent(ctx context.Context, tx *sql.Tx, projectID domain.ProjectID) error {
-	rows, err := tx.QueryContext(ctx, `SELECT project_id, type FROM t_project_events WHERE project_id = ?`, projectID)
+	rows, err := tx.QueryContext(ctx, `SELECT project_id, type FROM t_project_events WHERE project_id = ? AND change_id IS NULL`, projectID)
 	if err != nil {
 		return fmt.Errorf("query project initialized event: %w", err)
 	}

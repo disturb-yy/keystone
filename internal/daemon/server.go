@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/disturb-yy/keystone/contracts/controlplane"
+	"github.com/disturb-yy/keystone/internal/infrastructure/artifact"
 	"github.com/disturb-yy/keystone/internal/infrastructure/id"
 	"github.com/disturb-yy/keystone/internal/infrastructure/localstate"
 	"github.com/disturb-yy/keystone/internal/infrastructure/manifest"
@@ -63,6 +64,7 @@ type Server struct {
 	startedAt  string
 	readiness  bool
 	projects   *work.Service
+	changes    *work.ChangeService
 }
 
 // New 创建尚未运行的 Daemon 句柄。路径、目录、锁和监听器均在 Run 中按固定顺序创建。
@@ -223,6 +225,9 @@ func (s *Server) openAndMigrate(ctx context.Context) error {
 	}
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
+	if _, err := db.ExecContext(ctx, `PRAGMA foreign_keys = ON`); err != nil {
+		return errors.Join(fmt.Errorf("enable daemon database foreign keys: %w", err), closeDatabase(db))
+	}
 	if err := db.PingContext(ctx); err != nil {
 		return errors.Join(fmt.Errorf("ping daemon database: %w", err), closeDatabase(db))
 	}
@@ -247,8 +252,17 @@ func (s *Server) openAndMigrate(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("create project application service: %w", err)
 	}
+	artifactStore, err := artifact.New(paths.ArtifactsDir)
+	if err != nil {
+		return fmt.Errorf("create artifact store: %w", err)
+	}
+	changes, err := work.NewChangeService(state, repository.Git{}, artifactStore, state)
+	if err != nil {
+		return fmt.Errorf("create change application service: %w", err)
+	}
 	s.mu.Lock()
 	s.projects = projects
+	s.changes = changes
 	s.mu.Unlock()
 	return nil
 }
@@ -313,6 +327,7 @@ func (s *Server) shutdownResources() error {
 	s.listener = nil
 	s.db = nil
 	s.projects = nil
+	s.changes = nil
 	s.lock = nil
 	s.readiness = false
 	s.mu.Unlock()
@@ -361,6 +376,8 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("/v1/daemon/stop", s.handleStop)
 	mux.HandleFunc("/v1/projects/init", s.handleProjectInit)
 	mux.HandleFunc("/v1/projects/", s.handleProjectRoute)
+	mux.HandleFunc("/v1/changes", s.handleChangesRoot)
+	mux.HandleFunc("/v1/changes/", s.handleChangeRoute)
 	return mux
 }
 

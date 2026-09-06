@@ -89,8 +89,8 @@ func TestServerStatusIncludesProjectBootstrapSchema(t *testing.T) {
 	if response.DatabasePath != paths.DatabasePath {
 		t.Fatalf("DatabasePath = %q, want %q", response.DatabasePath, paths.DatabasePath)
 	}
-	if response.SchemaMigrationVersion != 2 || !response.DaemonReadiness {
-		t.Fatalf("status = %+v, want migration version 2 and ready", response)
+	if response.SchemaMigrationVersion != 3 || !response.DaemonReadiness {
+		t.Fatalf("status = %+v, want migration version 3 and ready", response)
 	}
 	if response.DaemonInstanceID != server.InstanceID() || response.DaemonInstanceID == "" {
 		t.Fatalf("DaemonInstanceID = %q, want current non-empty ID %q", response.DaemonInstanceID, server.InstanceID())
@@ -125,7 +125,7 @@ ORDER BY name`)
 	if err := rows.Err(); err != nil {
 		t.Fatal(err)
 	}
-	wantTables := []string{"t_project_events", "t_project_initialization_intents", "t_project_initialization_receipts", "t_projects", "t_schema_migrations"}
+	wantTables := []string{"t_agent_run_artifacts", "t_agent_runs", "t_artifact_refs", "t_artifacts", "t_change_command_receipts", "t_changes", "t_event_artifacts", "t_human_decisions", "t_project_events", "t_project_initialization_intents", "t_project_initialization_receipts", "t_projects", "t_schema_migrations"}
 	if len(tables) != len(wantTables) {
 		t.Fatalf("SQLite tables = %v, want %v", tables, wantTables)
 	}
