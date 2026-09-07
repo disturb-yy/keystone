@@ -81,12 +81,12 @@ Application 位于 Control Plane Daemon 内部；Ticket 04 Project Bootstrap 和
 
 ### L4 — Domain
 
-业务领域以 DDD Lite 组织，`domain/` 是业务强边界。当前只有 Ticket 04/05 所需的 `internal/work/` 与 `internal/work/domain/` 已创建；其他目标领域目录仍未创建：
+业务领域以 DDD Lite 组织，`domain/` 是业务强边界。当前 Ticket 04/05 的 `internal/work/` 与 `internal/work/domain/` 以及 Ticket 06 的执行边界已有 Go 实现；`internal/planning/` 仅有 Ticket 07 的局部导航文档，其他目标领域目录仍未创建：
 
 | 目标路径 | 逻辑子系统 | 地图中的核心对象 |
 | --- | --- | --- |
 | `internal/work/`、`internal/work/domain/` | Work & Lifecycle | 当前已创建；Project Bootstrap、Change Lifecycle、Artifact/Event Domain 与 Application |
-| `internal/planning/` | Intelligence & Planning | 尚未创建；Understanding、Context、Design、Plan、Ticket Generation |
+| `internal/planning/` | Intelligence & Planning | 已创建局部 `AGENTS.md`/`INDEX.md` 导航骨架；当前没有 Go 实现，目标为 Understanding、Context、Design、Plan、Ticket Generation |
 | `internal/governance/` | Governance | 尚未创建；Policy、Risk、Gate、Evidence、Decision、Escalation |
 | `internal/execution/` | Orchestration & Execution | 已创建 RuntimeAdapter、Codex Adapter、Evidence capture 和 ExecutionGuard；Frontier、Scheduler、Execution DAG 尚未实现 |
 | `internal/traceability/` | Traceability & Learning | 尚未创建；Artifact Lineage、Domain Event、Execution Trace、Eval、Incident |
@@ -148,6 +148,7 @@ Daemon → contracts/worker → Worker
 | Worker 入口 | `cmd/keystone-worker/` | `internal/worker`、L2 `contracts/worker/`、Workspace、Runtime |
 | 领域对象 | `internal/work/domain/` | Project Bootstrap、Change Lifecycle、Artifact/Event Domain |
 | 用例编排 | `internal/work/` | Project Bootstrap、Change Lifecycle Application |
+| Planning 规格与边界 | `internal/planning/`、`docs/FE20260903080401/tickets/07-understand-design-plan/` | 当前只有局部规约、索引和 Ticket 07 规划文档；无 Planning 运行实现 |
 | 持久化或外部适配 | `internal/infrastructure/` | Git/Manifest、Artifact store、Project/Change/Worker workstore、`migrations/` |
 | Ticket 02 实现 | `docs/FE20260903080401/tickets/02-local-state-and-boundary-contracts/` | spec、子 Ticket、localstate/migration/Contract 实现与验收记录 |
 | 运行术语与长期决策 | `CONTEXT.md`、`docs/adr/` | 术语消歧与已接受的本机 Daemon 控制边界 |
