@@ -3,8 +3,8 @@
 ## 边界
 
 该 package 是 Intelligence & Planning 的窄 Application/Contract 边界，负责
-Understand、Design、Plan 的 Context、结构化 Contract、schema validator、Stage
-Strategy、prompt/decoder 和 Coordinator port。
+Understand、Design、Plan、Ticketize 的 Context、结构化 Contract、schema validator、Stage
+Strategy、prompt/decoder 和 Coordinator port；Ticketize 只产生候选，不直接创建权威 Graph。
 
 ## 权威关系
 
@@ -21,11 +21,12 @@ Strategy、prompt/decoder 和 Coordinator port。
 ## 依赖和不变量
 
 - 阶段顺序固定为 `Understand -> Design -> Plan -> Ticketize`；Ticket 07 只生成前三类
-  已验证候选，Plan 不是 Ticket 或 Canonical Graph。
+  已验证候选，Ticket 08 的 Draft 仍不是 Canonical Graph，Graph 由 Work authority 提交。
 - 所有阶段使用不可变 `base_revision`、单一上游 Artifact 和有界
   `ProjectContext.v1`；上游 Artifact 必须经过严格 decoder/validator 才能进入下游。
 - Runtime 只提供候选 payload 和执行观察事实；只有 Coordinator/Daemon 在验证后才能
-  形成权威 Artifact、AgentRun 终态和 Change 推进。
+  形成权威 Artifact、AgentRun 终态和 Change 推进；Ticketize 成功还必须经过专用
+  Work completion port。
 - 失败、暂停、取消、旧 attempt、失效 Lease 和晚到结果遵循 Work/Worker fencing，
   不得复活或覆盖权威生命周期。
 - 所有可能阻塞或执行 I/O 的 port 接收 `context.Context`；不得把 Context 存入长生命

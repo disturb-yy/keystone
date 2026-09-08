@@ -216,6 +216,7 @@ type ChangeEventDTO struct {
 	ArtifactRefIDs []string `json:"artifact_ref_ids"`
 	AgentRunID     *string  `json:"agent_run_id"`
 	DecisionID     *string  `json:"decision_id"`
+	TicketGraphID  *string  `json:"ticket_graph_id,omitempty"`
 }
 
 // ChangeEventsResponse 是 Change Event Trace 成功响应。
@@ -232,6 +233,42 @@ type ChangeRunsResponse struct {
 type ChangeArtifactsResponse struct {
 	Artifacts []ArtifactRefDTO `json:"artifacts"`
 }
+
+// TicketGraphReadModel 是 Canonical Ticket Graph 的只读查询快照。
+// 它故意不包含 GenerationKey、执行状态、Lease 或授权字段。
+type TicketGraphReadModel struct {
+	GraphID             string                `json:"graph_id"`
+	ChangeID            string                `json:"change_id"`
+	ProjectID           string                `json:"project_id"`
+	BaseRevision        string                `json:"base_revision"`
+	PlanArtifact        ArtifactRefDTO        `json:"plan_artifact"`
+	DraftArtifact       ArtifactRefDTO        `json:"draft_artifact"`
+	TicketizeAgentRunID string                `json:"ticketize_agent_run_id"`
+	GeneratorName       string                `json:"generator_name"`
+	GeneratorVersion    string                `json:"generator_version"`
+	CreatedAt           string                `json:"created_at"`
+	Tickets             []CanonicalTicketDTO  `json:"tickets"`
+	Dependencies        []TicketDependencyDTO `json:"dependencies"`
+	StructuralFrontier  []string              `json:"structural_frontier"`
+}
+
+// CanonicalTicketDTO 是 Canonical Ticket 的公开稳定摘要。
+type CanonicalTicketDTO struct {
+	TicketID           string   `json:"ticket_id"`
+	Ordinal            int      `json:"ordinal"`
+	Title              string   `json:"title"`
+	Scope              string   `json:"scope"`
+	AcceptanceCriteria []string `json:"acceptance_criteria"`
+}
+
+// TicketDependencyDTO 是同一 Graph 内的 BLOCKED_BY 关系。
+type TicketDependencyDTO struct {
+	DependentTicketID string `json:"dependent_ticket_id"`
+	BlockerTicketID   string `json:"blocker_ticket_id"`
+}
+
+// TicketGraphResponse 保留一个可命名的契约别名，响应 JSON 仍是 ReadModel 本身。
+type TicketGraphResponse = TicketGraphReadModel
 
 // ChangeDecisionsResponse 是 HumanDecision Trace 成功响应。
 type ChangeDecisionsResponse struct {

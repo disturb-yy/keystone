@@ -8,8 +8,8 @@ SQLite 行为；这些行为由 `internal/daemon` 负责。
 
 ## 文件
 
-- `contract.go`：版本前缀、错误 envelope、健康响应、Daemon status/stop、Project Init/Query/Event Query、Change/Trace DTO、Planning Artifact/AgentRun 只读元数据和幂等键类型。
-- `contract_test.go`：Health、Daemon status/stop、错误 envelope、Planning metadata 向后兼容、幂等键的 JSON round-trip 和字段约束测试。
+- `contract.go`：版本前缀、错误 envelope、健康响应、Daemon status/stop、Project Init/Query/Event Query、Change/Trace/Ticket Graph DTO、Planning Artifact/AgentRun 只读元数据和幂等键类型。
+- `contract_test.go`：Health、Daemon status/stop、错误 envelope、Planning metadata 向后兼容、Ticket Graph 公开字段边界、幂等键的 JSON round-trip 和字段约束测试。
 - `AGENTS.md`：本 package 的职责、依赖和验证规约。
 
 ## 当前 DTO
@@ -30,6 +30,7 @@ SQLite 行为；这些行为由 `internal/daemon` 负责。
 | `HumanDecisionRequest` / `HumanDecisionResponse` | retry/cancel 人工恢复决定 |
 | `ChangeEventsResponse` / `ChangeRunsResponse` | Event 和 AgentRun Trace；AgentRun 可选返回 run kind 与固定 source revision |
 | `ChangeArtifactsResponse` / `ChangeDecisionsResponse` | ArtifactRef 和 HumanDecision Trace；ArtifactRef 可选返回 Planning kind、schema、summary、source revision 与输入/raw-log 关联 |
+| `TicketGraphReadModel` | `GET /v1/changes/{change_id}/ticket-graph` 的 Graph、Ticket、Acceptance Criteria、依赖和 StructuralFrontier 只读快照 |
 
 ## 关系
 
@@ -47,7 +48,7 @@ cmd/keystone → contracts/controlplane → internal/daemon HTTP Handler
 
 - 只依赖 Go 标准库，不引用 Domain、Application、Infrastructure、SQLite 或具体 Daemon 实现。
 - 不拥有 InstanceLock、RuntimeMetadata、SQLite 连接、Migration、readiness 或权威业务状态。
-- 不定义 Worker runtime、Project Domain、Change Domain、Ticket 或业务 Schema；Project/Change DTO 只是本 package 的传输边界，`contracts/worker` 是独立的另一条传输边界。
+- 不定义 Worker runtime、Project Domain、Change Domain、Ticketize 业务规则或业务 Schema；Ticket Graph DTO 只是只读传输边界，`contracts/worker` 是独立的另一条传输边界。
 
 ## 验证入口
 

@@ -85,6 +85,24 @@ func TestStatusAndStopNeverStartDaemon(t *testing.T) {
 	}
 }
 
+func TestTicketGraphQueryValidatesIDBeforeReadingDaemonMetadata(t *testing.T) {
+	paths := testPaths(t)
+	var runnerCalls int
+	deps := testDependencies(paths, func(context.Context, string, ...string) (DaemonProcess, error) {
+		runnerCalls++
+		return nil, errors.New("ticket graph query must not start a daemon")
+	})
+
+	_, err := executeCLI(t, deps, "--data-dir", paths.Root, "change", "ticket-graph", "not-a-uuid")
+	assertCLIErrorCategory(t, err, ErrorChangeFailed)
+	if runnerCalls != 0 {
+		t.Fatalf("daemon runner calls = %d, want 0", runnerCalls)
+	}
+	if _, statErr := os.Stat(paths.MetadataPath); !os.IsNotExist(statErr) {
+		t.Fatalf("metadata stat error = %v, want metadata to remain absent", statErr)
+	}
+}
+
 func TestStatusMetadataAndEndpointFailures(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -467,8 +485,8 @@ func TestRealCLIDaemonLifecycle(t *testing.T) {
 	if err := json.Unmarshal([]byte(startOutput), &startedStatus); err != nil {
 		t.Fatalf("decode real start output: %v", err)
 	}
-	if !startedStatus.DaemonReadiness || startedStatus.SchemaMigrationVersion != 5 {
-		t.Fatalf("real start status = %+v, want ready migration version 5", startedStatus)
+	if !startedStatus.DaemonReadiness || startedStatus.SchemaMigrationVersion != 6 {
+		t.Fatalf("real start status = %+v, want ready migration version 6", startedStatus)
 	}
 	if _, err := os.Stat(startedStatus.DatabasePath); err != nil {
 		t.Fatalf("real database stat error = %v", err)

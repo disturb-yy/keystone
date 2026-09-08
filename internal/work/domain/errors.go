@@ -45,4 +45,14 @@ var (
 	ErrPlanningRunDeferred = errors.New("planning agent run completion is deferred")
 	// ErrPlanningCandidateNotFound 表示 AgentRun 尚无可供 Coordinator 验证的耐久候选。
 	ErrPlanningCandidateNotFound = errors.New("planning candidate not found")
+	// ErrTicketGraphNotFound 表示 Change 尚未产生 Canonical Ticket Graph。
+	ErrTicketGraphNotFound = errors.New("ticket graph not found")
+	// ErrTicketGraphConflict 表示 Ticket Graph 已存在或提交身份不一致。
+	ErrTicketGraphConflict = errors.New("ticket graph conflicts with current authority")
+	// ErrTicketizeFenced 表示 Ticketize 结果已经越过当前 Change 围栏。
+	ErrTicketizeFenced = errors.New("ticketize result is fenced")
+	// ErrTicketizeUnavailable 表示 Ticketize 依赖暂时不可用，权威事实仍可重试。
+	ErrTicketizeUnavailable = errors.New("ticketize is temporarily unavailable")
+	// ErrTicketDraftInvalid 表示 Runtime 返回的 Ticket Draft 不满足严格 Contract。
+	ErrTicketDraftInvalid = errors.New("ticket draft is invalid")
 )

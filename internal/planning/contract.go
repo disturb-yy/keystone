@@ -1,4 +1,4 @@
-// Package planning 定义 Understand、Design、Plan 的纯候选 Contract 与策略边界。
+// Package planning 定义 Understand、Design、Plan、Ticketize 的纯候选 Contract 与策略边界。
 package planning
 
 import "encoding/json"
@@ -27,6 +27,7 @@ const (
 	StageUnderstand Stage = "Understand"
 	StageDesign     Stage = "Design"
 	StagePlan       Stage = "Plan"
+	StageTicketize  Stage = "Ticketize"
 )
 
 // ArtifactKind 是 Planning 输入和候选输出的语义类型。

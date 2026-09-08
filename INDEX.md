@@ -15,14 +15,14 @@
 | --- | --- | --- |
 | `go.mod` | 模块 `github.com/disturb-yy/keystone`，Go `1.27`，依赖 `golang.org/x/sys` 与 `modernc.org/sqlite` | 已声明，支持 Ticket 02 的跨平台锁和纯 Go SQLite 基线 |
 | `Makefile` | `test`、`build`、`lint`、`dashboard-build` 根级验证入口 | 已存在；Dashboard 目标使用 `package-lock.json` 执行 npm 校验/构建 |
-| `docs/FE20260903080401/` | V1 基线、里程碑、验收清单和版本化 Ticket/规格文档 | 已存在；Ticket 02 验收记录、Ticket 07 spec/01-05 子票与 Ticket 11 Dashboard Observation spec/子票均在当前树 |
+| `docs/FE20260903080401/` | V1 基线、里程碑、验收清单和版本化 Ticket/规格文档 | 已存在；Ticket 02 验收记录与 Ticket 07 spec/01-05 子票均在当前树 |
 | `CONTEXT.md`、`docs/adr/` | 项目术语与已接受的架构决策 | 已存在；记录 LocalStateRoot、DaemonReadiness 等语义及本机 Daemon 控制边界，不表示 M1 已实现 |
 | `cmd/`、`configs/` | `cmd/keystone`、`cmd/keystone-daemon`、`cmd/keystone-worker` 与 `configs` 的 `.gitkeep` | `init`、Change、Daemon CLI 和独立 Worker 入口已实现 |
 | `internal/infrastructure/` | 基础能力及 `manifest`、`repository`、`artifact`、`workstore` adapter | 已有本机状态、Migration、Git/Manifest、固定 revision Snapshot、Artifact 和 Project/Change/Worker/Planning SQLite 持久化能力 |
 | `contracts/controlplane/` | `/v1` 版本前缀、错误 envelope、Daemon/Project/Change/Artifact/AgentRun DTO、`Idempotency-Key` | 已落地 JSON Contract package；HTTP Handler 位于 `internal/daemon` |
 | `contracts/worker/` | Register、Heartbeat、Pull、Assignment、Report、Artifact 与 `planning_candidate` 传输 DTO | 已落地严格 JSON Contract；HTTP/authority 位于 Daemon/Work Store |
 | `docs/architecture-baseline/` | 架构参考目录 | 当前工作树不存在；目标架构文字不作为运行行为证据 |
-| `dashboard/` | React、TypeScript、Vite 源码、`package.json`、`package-lock.json` 与 `DESIGN.md` | 已有可构建骨架，无业务页面；`DESIGN.md` 固化 Ticket 11 的 UI 样式基线 |
+| `dashboard/` | React、TypeScript、Vite 源码、`package.json` 与 `package-lock.json` | 已有可构建骨架，无业务页面 |
 | `migrations/`、`scripts/` | 根级路径尚不存在 | Migration runner 位于 `internal/infrastructure/migration/`；Ticket 04/05 业务 Migration 由 `workstore` 提供 |
 
 当前工作树已有基础 `.go`、Ticket 02 基础设施、Ticket 04 Project Bootstrap、Ticket 05 Change Lifecycle/Artifact/Event、Ticket 06 本机 Worker/Runtime seam 和 Ticket 07 只读 Planning 纵切；Ticket Graph 和后续生产调度仍未实现。Ticket 06 的真实 Codex/原生 Windows 验收仍是独立证据缺口。`.agents/`、`.codex/` 和 `.idea/` 属于工作区或 IDE 工具目录，不纳入项目架构导航。
@@ -59,7 +59,7 @@ Human
 | 路径 | 地图位置 | 当前状态 |
 | --- | --- | --- |
 | `cmd/` | CLI、Daemon、Worker 入口边界 | `cmd/keystone` 已提供 `init`、Change 和 Daemon 生命周期命令；`cmd/keystone-worker` 已提供 stdin secret 的独立 Worker 入口 |
-| `dashboard/` | Local Web UI Client | 已有 React/TypeScript/Vite 骨架与锁文件；样式基线见 `dashboard/DESIGN.md`，业务页面仍未实现 |
+| `dashboard/` | Local Web UI Client | 已有 React/TypeScript/Vite 骨架与锁文件 |
 
 ### L2 — Contract
 

@@ -137,6 +137,19 @@ func (s *Server) handleChangeRoute(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if parts[1] == "ticket-graph" {
+		if len(parts) != 2 || r.Method != http.MethodGet {
+			writeError(w, http.StatusMethodNotAllowed, "invalid_request", "method is not allowed")
+			return
+		}
+		graph, err := service.TicketGraph(r.Context(), changeID)
+		if err != nil {
+			writeChangeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, ticketGraphReadModelDTO(graph))
+		return
+	}
 	if r.Method != http.MethodGet {
 		writeError(w, http.StatusMethodNotAllowed, "invalid_request", "method is not allowed")
 		return
@@ -367,7 +380,12 @@ func changeEventDTO(event domain.ChangeEvent) controlplane.ChangeEventDTO {
 		value := string(*event.DecisionID)
 		decisionID = &value
 	}
-	return controlplane.ChangeEventDTO{EventID: event.EventID, ChangeID: string(event.ChangeID), Sequence: event.Sequence, Type: event.Type, OccurredAt: event.OccurredAt.UTC().Format(timeRFC3339Nano), Actor: event.Actor, ArtifactRefIDs: refs, AgentRunID: runID, DecisionID: decisionID}
+	var graphID *string
+	if event.TicketGraphID != nil {
+		value := string(*event.TicketGraphID)
+		graphID = &value
+	}
+	return controlplane.ChangeEventDTO{EventID: event.EventID, ChangeID: string(event.ChangeID), Sequence: event.Sequence, Type: event.Type, OccurredAt: event.OccurredAt.UTC().Format(timeRFC3339Nano), Actor: event.Actor, ArtifactRefIDs: refs, AgentRunID: runID, DecisionID: decisionID, TicketGraphID: graphID}
 }
 
 func writeChangeError(w http.ResponseWriter, err error) {
@@ -382,9 +400,9 @@ func changeStatus(code string) int {
 		return http.StatusBadRequest
 	case "repository_dirty", "base_revision_unavailable", "source_snapshot_unstable", "lifecycle_transition_invalid", "human_decision_required":
 		return http.StatusConflict
-	case "project_not_found", "change_not_found", "artifact_not_found":
+	case "project_not_found", "change_not_found", "artifact_not_found", "ticket_graph_not_found":
 		return http.StatusNotFound
-	case "idempotency_conflict", "change_version_conflict":
+	case "idempotency_conflict", "change_version_conflict", "ticket_graph_conflict":
 		return http.StatusConflict
 	case "unavailable":
 		return http.StatusServiceUnavailable
@@ -413,6 +431,10 @@ func changeMessage(code string) string {
 		return "change was not found"
 	case "artifact_not_found":
 		return "artifact was not found"
+	case "ticket_graph_not_found":
+		return "ticket graph was not found"
+	case "ticket_graph_conflict":
+		return "ticket graph conflicts with current authority"
 	case "project_not_found":
 		return "project was not found"
 	case "unavailable":

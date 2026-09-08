@@ -183,7 +183,7 @@ func TestPlanningFailureRequiresExplicitRetryTarget(t *testing.T) {
 	}
 }
 
-func TestPlanningStagesStopAtTicketize(t *testing.T) {
+func TestPlanningStagesRemainRecoverableAtTicketize(t *testing.T) {
 	store := newTestStore(t)
 	_, initial := createTestChange(t, store, "/tmp/planning-sequence", "sequence-project", "sequence-change")
 	change := initial
@@ -211,8 +211,8 @@ func TestPlanningStagesStopAtTicketize(t *testing.T) {
 	}
 	if changes, err := store.ListRecoverablePlanningChanges(context.Background()); err != nil {
 		t.Fatal(err)
-	} else if len(changes) != 0 {
-		t.Fatalf("Ticketize change remained recoverable = %+v", changes)
+	} else if len(changes) != 1 || changes[0].ID != change.ID || changes[0].Stage != domain.LifecycleStageTicketize {
+		t.Fatalf("Ticketize change recovery = %+v, want current Ticketize change", changes)
 	}
 }
 
@@ -625,6 +625,59 @@ func TestPlanningArtifactStoreFailureBecomesDurableCandidate(t *testing.T) {
 	}
 }
 
+func TestTicketizeArtifactStoreFailureRemainsUnavailableForSameReportRetry(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+	_, change := createTestChange(t, store, t.TempDir(), "ticketize-artifact-project", "ticketize-artifact-change")
+	planRef := advanceTestChangeToTicketize(t, store, change)
+	run, err := store.StartTicketizeRun(ctx, work.StartPlanningRunRequest{
+		ChangeID: change.ID, TargetStage: domain.LifecycleStageTicketize, ExpectedChangeVersion: 4,
+		SourceRevision: change.BaseRevision, Actor: "planning", InputArtifactRefIDs: []domain.ArtifactRefID{planRef.ID},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	workerID := registerPlanningWorker(t, store, "ticketize-artifact-worker")
+	assignment, err := store.IssuePlanningAssignment(ctx, run.ID, workerID, t.TempDir(), "codex", "produce ticket draft", change.BaseRevision, "ticketize-artifact-snapshot", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	exitCode := 0
+	report := workercontract.Report{
+		AgentRunID: string(run.ID), LeaseToken: assignment.LeaseToken, Attempt: run.Attempt,
+		Outcome: "succeeded", ExitCode: &exitCode, AfterRevision: change.BaseRevision,
+		Artifacts: []workercontract.Artifact{workerReportArtifact("candidate", []byte(`{"schema_version":"keystone.ticket-draft.v1","tickets":[]}`), false)},
+	}
+	if _, err := store.ReportWorkerFor(ctx, workerID, report, failingWorkerArtifactStore{}); !errors.Is(err, ErrWorkerUnavailable) {
+		t.Fatalf("ticketize artifact failure = %v, want ErrWorkerUnavailable", err)
+	}
+	if _, err := store.FindPlanningRunCandidate(ctx, run.ID); !errors.Is(err, domain.ErrPlanningCandidateNotFound) {
+		t.Fatalf("ticketize candidate after unavailable = %v, want not found", err)
+	}
+	var state string
+	if err := store.db.QueryRowContext(ctx, `SELECT state FROM t_worker_leases WHERE agent_run_id = ?`, run.ID).Scan(&state); err != nil {
+		t.Fatal(err)
+	}
+	if state != "active" {
+		t.Fatalf("ticketize lease state after unavailable = %q, want active", state)
+	}
+	current, err := store.FindChange(ctx, change.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.Stage != domain.LifecycleStageTicketize || current.Status != domain.ChangeStatusActive || current.LatestAgentRun == nil || current.LatestAgentRun.Status != domain.AgentRunStatusRunning {
+		t.Fatalf("ticketize authority after unavailable = %+v", current)
+	}
+	artifactStore, err := artifact.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := store.ReportWorkerFor(ctx, workerID, report, artifactStore)
+	if err != nil || response.Disposition != "candidate_received" {
+		t.Fatalf("ticketize retry = %+v, err=%v", response, err)
+	}
+}
+
 func TestMalformedWorkerArtifactIsPermanentReportError(t *testing.T) {
 	report := workercontract.Report{Artifacts: []workercontract.Artifact{{
 		Kind: "candidate", ContentBase64: "not-base64", SHA256: strings.Repeat("0", 64), SizeBytes: 1,
@@ -743,8 +796,8 @@ func TestPlanningMigrationPreservesLegacyArtifactRefs(t *testing.T) {
 	if len(refs) != 1 || !refs[0].IsLegacy() {
 		t.Fatalf("migrated legacy refs = %+v", refs)
 	}
-	if migrations[len(migrations)-1].Version != 5 {
-		t.Fatalf("planning migration version = %d", migrations[len(migrations)-1].Version)
+	if migrations[len(migrations)-1].Version != 6 {
+		t.Fatalf("planning migration version = %d, want 6", migrations[len(migrations)-1].Version)
 	}
 }
 

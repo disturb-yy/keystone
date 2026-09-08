@@ -59,6 +59,7 @@ const (
 	HumanDecisionRecordedType = "HumanDecisionRecorded"
 	ChangeCancelledType       = "ChangeCancelled"
 	AgentRunReportLateType    = "AgentRunReportLate"
+	TicketGraphCreatedType    = "TicketGraphCreated"
 
 	// ArtifactRole 是 ArtifactRef 在 Change Trace 中的稳定角色。
 	ArtifactRoleChangeIntent = "change_intent"
@@ -204,6 +205,7 @@ type ChangeEvent struct {
 	ArtifactRefIDs []ArtifactRefID
 	AgentRunID     *AgentRunID
 	DecisionID     *HumanDecisionID
+	TicketGraphID  *TicketGraphID
 }
 
 // Change 是绑定 Project、BaseRevision 和生命周期状态的权威事实。
@@ -459,7 +461,7 @@ func validateAgentRunKind(run AgentRun) error {
 		}
 		return nil
 	case AgentRunKindPlanning:
-		if run.Stage != LifecycleStageUnderstand && run.Stage != LifecycleStageDesign && run.Stage != LifecycleStagePlan {
+		if run.Stage != LifecycleStageUnderstand && run.Stage != LifecycleStageDesign && run.Stage != LifecycleStagePlan && run.Stage != LifecycleStageTicketize {
 			return fmt.Errorf("%w: planning agent run stage is invalid", ErrInvalidRequest)
 		}
 		if !validObjectID(run.SourceRevision) {

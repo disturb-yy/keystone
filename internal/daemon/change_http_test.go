@@ -16,6 +16,7 @@ import (
 
 	"github.com/disturb-yy/keystone/contracts/controlplane"
 	"github.com/disturb-yy/keystone/internal/infrastructure/artifact"
+	"github.com/disturb-yy/keystone/internal/infrastructure/id"
 	"github.com/disturb-yy/keystone/internal/infrastructure/manifest"
 	"github.com/disturb-yy/keystone/internal/infrastructure/migration"
 	"github.com/disturb-yy/keystone/internal/infrastructure/repository"
@@ -184,6 +185,46 @@ func TestChangeHTTPCreateControlTraceAndArtifact(t *testing.T) {
 	decodeJSON(t, projectEventsResponse, &projectEvents)
 	if len(projectEvents.Events) != 1 || projectEvents.Events[0].Type != "ProjectInitialized" {
 		t.Fatalf("project events = %+v, want only project initialization", projectEvents.Events)
+	}
+}
+
+func TestTicketGraphHTTPErrorBoundaries(t *testing.T) {
+	server, root := newChangeHTTPTestServer(t)
+	handler := server.routes()
+
+	invalid := httptest.NewRecorder()
+	handler.ServeHTTP(invalid, httptest.NewRequest(http.MethodGet, "/v1/changes/not-a-uuid/ticket-graph", nil))
+	if invalid.Code != http.StatusBadRequest {
+		t.Fatalf("invalid ticket graph status = %d, want 400", invalid.Code)
+	}
+	assertErrorCode(t, invalid, "invalid_request")
+
+	unknown := httptest.NewRecorder()
+	handler.ServeHTTP(unknown, httptest.NewRequest(http.MethodGet, "/v1/changes/"+id.New()+"/ticket-graph", nil))
+	if unknown.Code != http.StatusNotFound {
+		t.Fatalf("unknown ticket graph status = %d, want 404", unknown.Code)
+	}
+	assertErrorCode(t, unknown, "change_not_found")
+
+	if _, err := server.projects.Initialize(context.Background(), work.InitializeRequest{RepositoryPath: root, IdempotencyKey: "ticket-graph-http-project"}); err != nil {
+		t.Fatal(err)
+	}
+	commitGit(t, root, "add ticket graph http project manifest")
+	change, err := server.changes.Create(context.Background(), work.ChangeCreateRequest{RepositoryPath: root, Intent: "ticket graph http boundary", IdempotencyKey: "ticket-graph-http-change", Actor: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	missing := httptest.NewRecorder()
+	handler.ServeHTTP(missing, httptest.NewRequest(http.MethodGet, "/v1/changes/"+string(change.ID)+"/ticket-graph", nil))
+	if missing.Code != http.StatusNotFound {
+		t.Fatalf("missing ticket graph status = %d, want 404", missing.Code)
+	}
+	assertErrorCode(t, missing, "ticket_graph_not_found")
+
+	method := httptest.NewRecorder()
+	handler.ServeHTTP(method, httptest.NewRequest(http.MethodPost, "/v1/changes/"+string(change.ID)+"/ticket-graph", nil))
+	if method.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("ticket graph method status = %d, want 405", method.Code)
 	}
 }
 

@@ -359,6 +359,14 @@ func ChangeErrorCode(err error) string {
 		return "lifecycle_transition_invalid"
 	case errors.Is(err, domain.ErrHumanDecisionRequired):
 		return "human_decision_required"
+	case errors.Is(err, domain.ErrTicketGraphNotFound):
+		return "ticket_graph_not_found"
+	case errors.Is(err, domain.ErrTicketGraphConflict), errors.Is(err, domain.ErrTicketizeFenced):
+		return "ticket_graph_conflict"
+	case errors.Is(err, domain.ErrTicketizeUnavailable):
+		return "unavailable"
+	case errors.Is(err, domain.ErrTicketDraftInvalid):
+		return "ticket_draft_invalid"
 	default:
 		return "internal_error"
 	}

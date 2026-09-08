@@ -158,8 +158,8 @@ func TestServerComposesAndStartsPlanningRecovery(t *testing.T) {
 		t.Fatal("planning coordinator was not composed")
 	}
 	version, err := readMigrationVersion(context.Background(), server.db)
-	if err != nil || version != 5 {
-		t.Fatalf("schema migration version = %d, err = %v, want 5", version, err)
+	if err != nil || version != 6 {
+		t.Fatalf("schema migration version = %d, err = %v, want 6", version, err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	if err := server.startPlanningManager(ctx); err != nil {
