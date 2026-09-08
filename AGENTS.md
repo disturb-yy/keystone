@@ -14,6 +14,12 @@
 
 不得仅凭文件名或猜测修改代码。
 
+## 授权和确认边界
+
+- 用户明确要求“修改文件前先确认”时，先给出本批次完整文件范围和影响，取得一次集中确认；该确认覆盖已列文件及其必要的验证产物。只有新增文件、实质扩大范围、不可逆或破坏性操作、外部发布，或新的高影响授权需求才再次确认。
+- 当前任务内用户已确认的范围和决定持续有效。Agent 对已授权的只读检查、常规实现、测试、验证和内部阶段转换连续执行。
+- “确认已阅读”“确认依赖方向”“确认变更层级”是 Agent 的内部自检，不是向用户重复提问。资料缺失时先从仓库、日志、测试和可用替代工具查找；只有关键事实无法自行获取且会改变结果时才暂停。
+
 ## 当前仓库事实
 
 - `go.mod` 声明模块 `github.com/disturb-yy/keystone`，Go 版本为 `1.27`，并包含当前 CLI 所需的 Cobra、跨平台锁所需的 `golang.org/x/sys` 和纯 Go SQLite driver `modernc.org/sqlite`。
@@ -89,6 +95,8 @@ Change、Worker、只读 Planning 和 Ticketize/Canonical Ticket Graph 代码链
 - Worker 只持有执行句柄、心跳、Workspace、运行时会话和日志等短期运行信息，不拥有 Change、Ticket、Gate、依赖图或 Recovery Decision 的权威状态。
 - Client 只能通过 Control Plane API Contract 访问 Daemon；Worker 只能通过 Narrow Worker Protocol 与 Daemon 交互。Client 和 Worker 都不能直接修改 Keystone DB。
 - Governance 必须在敏感副作用前生效；Agent 只能在 Assigned Workspace 中执行，不能直接修改 Project 原始 Repository Workspace。
+
+这里的 `Assigned Workspace`、Gate、Decision 和 Worker 权威边界描述 Keystone 的产品运行时；它们不限制本仓库中已经授权的开发、文档和验证工作。
 
 ### 代码组织
 
@@ -277,7 +285,7 @@ context.Context
 3. Repository / Provider 集成测试。
 4. Handler / Interface Adapter 测试。
 
-修改业务规则时必须优先补充 Domain 测试。完成代码变更后执行 `go test ./...`；必要时执行 `go vet ./...`。
+修改业务行为时必须优先补充或更新 Domain／Application 测试。代码行为变更完成后执行 `go test ./...`，必要时执行 `go vet ./...`；纯文档、配置或导航变更执行适用的文档检查，不因没有 Go 行为变化而强制运行全量 Go 测试。
 
 ## Change Discipline
 
@@ -290,11 +298,11 @@ context.Context
 
 修改后：
 
-- 更新测试。
-- 更新受影响的 `INDEX.md`。
+- 行为变化时更新或新增针对性测试；纯文档、配置或导航变更不强制添加测试。
+- 只有路径、关系或当前事实发生变化时，才更新受影响的 `INDEX.md`。
 - 架构规则改变时更新本文件。
 - 结构变化时同步更新根 `README.md` 和 `INDEX.md`。
-- 执行 `go test ./...`，必要时执行 `go vet ./...`。
+- 执行适用的验证命令；代码行为变更使用 `go test ./...`，必要时执行 `go vet ./...`。
 - 文档变更后执行 `git diff --check`，并检查描述是否有当前文件树或源码无法验证的方案性表述。
 
 ## Prohibited

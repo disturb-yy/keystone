@@ -632,24 +632,44 @@ _避免_：SSE 状态同步、可靠事件队列、Event Replay
 Golden Path 中被 Keystone 管理的示例服务自身的健康检查端点。它与 DaemonReadinessEndpoint 属于不同系统主体。
 _避免_：DaemonReadinessEndpoint
 
+**DemoAcceptanceCriteria**：
+Golden Path demo candidate 必须同时满足的六条固定验收约束，覆盖原 `GET /` 行为、DemoServiceHealthEndpoint 语义和确定性自动化测试。它属于 Golden Path E2E 契约，不是任一 CanonicalTicket 的 AcceptanceCriterion。
+_避免_：CanonicalTicket AcceptanceCriterion、DaemonReadiness 检查、仅格式化测试
+
 ## Golden Path 验收
 
 **GoldenPathFixture**：
 仓库内保存的不含 `.git` 的 Go HTTP demo 初始源，可包含已版本化的 ProjectManifest V2；每次 E2E 将其复制到临时目录并执行 `git init`，不把嵌套 Git Repository 纳入 Keystone 主仓库。
 _避免_：共享临时 Repository、携带历史的 fixture、主仓库子模块
 
+**GoldenPathKeystoneRevision**：
+一次 GoldenPathRun 用于构建 Keystone 二进制的完整、不可变 Git OID，由操作者显式指定。它不是 demo 的 BaseRevision、CandidateRevision、分支名或调用者工作树的当前 HEAD。
+_避免_：BaseRevision、CandidateRevision、分支名、当前 HEAD
+
 **GoldenPathRun**：
-从 `init` 到 Dashboard Trace 的一次完整验收尝试，由公开 CLI 或 Control Plane API 驱动并记录实际结果；所有 runtime-backed AgentRun 使用真实 Codex，直接写 SQLite、调用内部 Service 或用 debug 接口伪造状态不属于 GoldenPathRun。
+从 `init` 到 Dashboard Trace 的一次完整验收尝试，在独立且复核前保留的临时 Repository 与 LocalStateRoot 中由公开 CLI 或 Control Plane API 驱动并记录实际结果；所有 runtime-backed AgentRun 使用真实 Codex，直接写 SQLite、调用内部 Service 或用 debug 接口伪造状态不属于 GoldenPathRun。
 _避免_：单元测试、局部 smoke、mock Runtime 代替的完整链路
 
 **GoldenPathRunner**：
-一个显式调用、可重复且有界的本机验收编排器；它只提交公开 Command、读取公开 Query 并采集证据，不被普通测试自动触发，也不拥有业务状态或恢复决策权。
+一个显式调用、可重复且有界的本机验收编排器；它从 GoldenPathKeystoneRevision 构建、为每次 Run 隔离并在复核前保留现场，只提交公开 Command、读取公开 Query 并采集证据，且只为发现自身 DaemonEndpoint 而受限读取其 LocalStateRoot 的 RuntimeMetadata，不被普通测试自动触发，也不拥有业务状态或恢复决策权。
 _避免_：测试 fixture、内部 Application 驱动器、数据库脚本
+
+**GoldenPathCommandLedger**：
+一个 GoldenPathRun 在受控临时根中保存的非权威命令重放记录，将一次逻辑公开写入固定关联到其规范请求、ChangeVersion 和 IdempotencyKey。它只限制 Runner 的重送，不替代 Daemon 的 CommandReceipt 或权威状态。
+_避免_：CommandReceipt、Daemon 账本、可变重试草稿
+
+**GoldenPathBrowserObservation**：
+一个 GoldenPathRun 在 Daemon 托管的生产 Dashboard 上形成的可复核浏览器观察，包含真实 Query、EventSource 断线重连和页面刷新后的状态重建。它不是 dev server、mock payload、浏览器缓存或仅有截图。
+_避免_：前端状态模拟、静态截图、Dashboard 单元测试
 
 **RealCodexAcceptance**：
 Worker 在一次 runtime-backed AgentRun 中实际启动 Codex CLI 并形成可复核候选或审查结果的验收事实；Execute 阶段必须形成源码修改，Planning/Verify 阶段可分别形成 candidate 或只读审查结果，且必须记录 Codex 版本和真实进程结果。Fake Runtime、版本探针和交叉编译不能替代它。
 _避免_：Runtime 自报成功、fake Codex、交叉编译运行证据
 
+**GoldenPathReview**：
+独立审阅者针对一个固定 GoldenPathRun 的脱敏 review packet 作出的只读结论，结论只能为 PASS、FAIL 或 UNVERIFIED。只有 PASS 允许将该平台 Run 写入 GoldenPathEvidence。
+_避免_：Runner 自检、Runtime outcome、未复核的成功摘要
+
 **GoldenPathEvidence**：
-按平台保存的一条或多条成功 GoldenPathRun 脱敏复盘记录，分别覆盖 Keystone Source、Demo Candidate 和 GoldenPath Trace 三条不能互相替代的证据链；它不得包含 secret、token 或本机绝对路径，且未完成真实 Codex 验收时不得伪造成功记录。
+按平台保存且已获 GoldenPathReview PASS 的成功 GoldenPathRun 脱敏复盘记录，分别覆盖 Keystone Source、Demo Candidate 和 GoldenPath Trace 三条不能互相替代的证据链；它必须标识实际运行平台，使 Linux 与 WSL 不可复用同一 Run，也不得包含 secret、token 或本机绝对路径，且未完成真实 Codex 验收时不得伪造成功记录。
 _避免_：设计计划、仅有测试日志的记录、未验证的运行摘要
