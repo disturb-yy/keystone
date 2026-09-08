@@ -29,3 +29,10 @@
 - Ticketize completion 必须同时满足 active/Ticketize、当前 AgentRun、同一 source revision、
   成功 Plan output 和 Ticketize Draft output 来源约束；成功时在同一事务内写 Graph、事件、
   AgentRun 终态、StageAdvanced 和 Execute checkpoint。
+- Schema v7 提供 Execute/Workspace/Assignment/Snapshot authority；Schema v8 追加
+  VerificationPolicySnapshot、VerificationIntent、typed verification result、snapshot、
+  CommitIntent、KeystoneCommit、CandidateRevision 和治理事件。策略、验证证据、提交和
+  CandidateRevision 不得被更新或删除；CommitIntent 是 Git/SQLite 中断后的唯一恢复锚点。
+- Verify 只为声明 `verification-v1` 的 Worker 创建 inspect Assignment；Report 的 PASS/FAIL/
+  HUMAN_REQUIRED 由 authority 根据固定命令、候选身份和 Criterion 覆盖独立推导，不能直接
+  采信 Worker `Report.Outcome`。未完成 Ticket Gate 时 Execute scheduler 不得发放下一张 Ticket。

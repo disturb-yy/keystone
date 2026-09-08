@@ -12,6 +12,7 @@ import (
 	"os/signal"
 	"strings"
 
+	workercontract "github.com/disturb-yy/keystone/contracts/worker"
 	"github.com/disturb-yy/keystone/internal/execution"
 	"github.com/disturb-yy/keystone/internal/execution/adapters/codex"
 	worker "github.com/disturb-yy/keystone/internal/worker"
@@ -35,7 +36,7 @@ func main() {
 	runner, err := worker.NewRunner(worker.RunnerConfig{
 		Client:       client,
 		WorkerID:     *workerID,
-		Capabilities: []string{"runtime:" + execution.RuntimeCodex},
+		Capabilities: []string{"runtime:" + execution.RuntimeCodex, workercontract.VerificationCapability},
 		Runtimes: map[string]execution.RuntimeAdapter{
 			execution.RuntimeCodex: codex.New(*codexBinary),
 		},

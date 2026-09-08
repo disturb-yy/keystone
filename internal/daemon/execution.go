@@ -10,7 +10,9 @@ import (
 	"github.com/disturb-yy/keystone/contracts/controlplane"
 	executionapp "github.com/disturb-yy/keystone/internal/execution/application"
 	executiondomain "github.com/disturb-yy/keystone/internal/execution/domain"
+	"github.com/disturb-yy/keystone/internal/infrastructure/manifest"
 	"github.com/disturb-yy/keystone/internal/infrastructure/sourcecontrol"
+	"github.com/disturb-yy/keystone/internal/infrastructure/workstore"
 	"github.com/disturb-yy/keystone/internal/work"
 	"github.com/disturb-yy/keystone/internal/work/domain"
 )
@@ -78,7 +80,27 @@ func (s *Server) handleChangeExecute(w http.ResponseWriter, r *http.Request, ser
 		writeExecutionError(w, err)
 		return
 	}
+	s.captureVerificationPolicy(r.Context(), change, session)
 	writeJSON(w, http.StatusAccepted, controlplane.ChangeExecuteResponse{Change: changeDTO(change), Execution: executionReadModelDTO(session)})
+}
+
+func (s *Server) captureVerificationPolicy(ctx context.Context, change domain.Change, session executionapp.ExecutionSession) {
+	s.mu.RLock()
+	state, paths, adapter := s.workerStore, s.paths, s.sourceControl
+	s.mu.RUnlock()
+	if state == nil {
+		return
+	}
+	workspacePath := filepath.Join(paths.WorkspacesDir, string(change.ProjectID), string(change.ID))
+	data, err := adapter.ReadManifestAtRevision(ctx, workspacePath, change.BaseRevision)
+	if err != nil {
+		return
+	}
+	value, err := manifest.ParseV2(data)
+	if err != nil || value.ProjectID != change.ProjectID {
+		return
+	}
+	_ = state.SaveVerificationPolicySnapshot(ctx, workstore.VerificationPolicySnapshotInput{SessionID: session.ID, ProjectID: string(change.ProjectID), ChangeID: string(change.ID), BaseRevision: change.BaseRevision, Manifest: value})
 }
 
 func (s *Server) handleChangeExecution(w http.ResponseWriter, r *http.Request, changeID string) {
@@ -87,8 +109,17 @@ func (s *Server) handleChangeExecution(w http.ResponseWriter, r *http.Request, c
 		return
 	}
 	s.mu.RLock()
-	service := s.execution
+	service, state := s.execution, s.workerStore
 	s.mu.RUnlock()
+	if state != nil {
+		model, err := state.ReadExecution(r.Context(), changeID)
+		if err != nil {
+			writeGovernanceError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, executionReadModelStoreDTO(model))
+		return
+	}
 	if service == nil {
 		writeError(w, http.StatusServiceUnavailable, "unavailable", "execution service is unavailable")
 		return

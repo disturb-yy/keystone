@@ -362,7 +362,7 @@ func (s *Store) IssueNextExecutionAssignment(ctx context.Context, workerID strin
 	const candidateQuery = `
 SELECT session.session_id, session.project_id, session.change_id, graph.graph_id,
        ticket.ticket_id, ticket.ordinal, ticket.title, ticket.scope,
-       session.workspace_id, session.workspace_path, session.base_revision, session.instruction
+       session.workspace_id, session.workspace_path, session.input_revision, session.instruction
 FROM t_execution_sessions session
 JOIN t_changes change ON change.change_id = session.change_id AND change.project_id = session.project_id
 JOIN t_ticket_graphs graph ON graph.change_id = session.change_id AND graph.project_id = session.project_id
@@ -399,6 +399,18 @@ WHERE session.status = 'waiting'
       )
       WHERE authorization.session_id = session.session_id
         AND lease.state = 'active'
+  )
+  AND NOT EXISTS (
+      SELECT 1
+      FROM t_ticket_execution_states completed_state
+      WHERE completed_state.graph_id = graph.graph_id
+        AND completed_state.state = 'succeeded'
+        AND NOT EXISTS (
+            SELECT 1
+            FROM t_keystone_commits keystone_commit
+            WHERE keystone_commit.change_id = session.change_id
+              AND keystone_commit.ticket_id = completed_state.ticket_id
+        )
   )
 ORDER BY session.dispatch_sequence, ticket.ordinal, session.session_id
 LIMIT 1`

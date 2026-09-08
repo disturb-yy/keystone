@@ -122,6 +122,24 @@ func (s *Server) handleChangeRoute(w http.ResponseWriter, r *http.Request) {
 		s.handleChangeExecution(w, r, string(changeID))
 		return
 	}
+	if parts[1] == "tickets" && len(parts) == 4 {
+		switch parts[3] {
+		case "verify":
+			s.handleChangeTicketVerify(w, r, service, string(changeID), parts[2])
+			return
+		case "commit":
+			s.handleChangeTicketCommit(w, r, service, string(changeID), parts[2])
+			return
+		}
+	}
+	if parts[1] == "final-verify" {
+		if len(parts) != 2 {
+			writeError(w, http.StatusNotFound, "change_not_found", "change was not found")
+			return
+		}
+		s.handleChangeFinalVerify(w, r, service, changeID)
+		return
+	}
 	if parts[1] == "commands" || parts[1] == "command" {
 		if r.Method != http.MethodPost || len(parts) != 2 {
 			writeError(w, http.StatusMethodNotAllowed, "invalid_request", "method is not allowed")

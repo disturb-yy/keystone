@@ -179,6 +179,51 @@ func (c *daemonHTTPClient) changeExecution(ctx context.Context, endpoint, change
 	return result, nil
 }
 
+func (c *daemonHTTPClient) changeVerify(ctx context.Context, endpoint, key, changeID, ticketID string, payload controlplane.ChangeVerifyRequest) (controlplane.ChangeVerifyResponse, error) {
+	response, err := c.requestWithHeaders(ctx, http.MethodPost, endpoint, "/v1/changes/"+url.PathEscape(changeID)+"/tickets/"+url.PathEscape(ticketID)+"/verify", payload, map[string]string{controlplane.IdempotencyKeyHeader: key})
+	if err != nil {
+		return controlplane.ChangeVerifyResponse{}, err
+	}
+	if response.StatusCode != http.StatusAccepted {
+		return controlplane.ChangeVerifyResponse{}, c.protocolFailure(response, ErrorChangeFailed, "Ticket Verify 请求失败")
+	}
+	var result controlplane.ChangeVerifyResponse
+	if err := decodeJSONResponse(response, &result); err != nil {
+		return controlplane.ChangeVerifyResponse{}, newCLIError(ErrorInvalidResponse, "Ticket Verify JSON 无效", err)
+	}
+	return result, nil
+}
+
+func (c *daemonHTTPClient) changeCommit(ctx context.Context, endpoint, key, changeID, ticketID string, payload controlplane.ChangeCommitRequest) (controlplane.ChangeCommitResponse, error) {
+	response, err := c.requestWithHeaders(ctx, http.MethodPost, endpoint, "/v1/changes/"+url.PathEscape(changeID)+"/tickets/"+url.PathEscape(ticketID)+"/commit", payload, map[string]string{controlplane.IdempotencyKeyHeader: key})
+	if err != nil {
+		return controlplane.ChangeCommitResponse{}, err
+	}
+	if response.StatusCode != http.StatusOK {
+		return controlplane.ChangeCommitResponse{}, c.protocolFailure(response, ErrorChangeFailed, "Ticket Commit 请求失败")
+	}
+	var result controlplane.ChangeCommitResponse
+	if err := decodeJSONResponse(response, &result); err != nil {
+		return controlplane.ChangeCommitResponse{}, newCLIError(ErrorInvalidResponse, "Ticket Commit JSON 无效", err)
+	}
+	return result, nil
+}
+
+func (c *daemonHTTPClient) changeFinalVerify(ctx context.Context, endpoint, key, changeID string, payload controlplane.ChangeFinalVerifyRequest) (controlplane.ChangeFinalVerifyResponse, error) {
+	response, err := c.requestWithHeaders(ctx, http.MethodPost, endpoint, "/v1/changes/"+url.PathEscape(changeID)+"/final-verify", payload, map[string]string{controlplane.IdempotencyKeyHeader: key})
+	if err != nil {
+		return controlplane.ChangeFinalVerifyResponse{}, err
+	}
+	if response.StatusCode != http.StatusAccepted {
+		return controlplane.ChangeFinalVerifyResponse{}, c.protocolFailure(response, ErrorChangeFailed, "Final Verify 请求失败")
+	}
+	var result controlplane.ChangeFinalVerifyResponse
+	if err := decodeJSONResponse(response, &result); err != nil {
+		return controlplane.ChangeFinalVerifyResponse{}, newCLIError(ErrorInvalidResponse, "Final Verify JSON 无效", err)
+	}
+	return result, nil
+}
+
 func (c *daemonHTTPClient) changeCommand(ctx context.Context, endpoint, key, changeID string, payload controlplane.ChangeCommandRequest) (controlplane.ChangeCommandResponse, error) {
 	response, err := c.requestWithHeaders(ctx, http.MethodPost, endpoint, "/v1/changes/"+url.PathEscape(changeID)+"/commands", payload, map[string]string{controlplane.IdempotencyKeyHeader: key})
 	if err != nil {

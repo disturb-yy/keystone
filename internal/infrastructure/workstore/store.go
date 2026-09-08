@@ -59,6 +59,7 @@ func Migrations() []migration.Migration {
 		planningMigration(),
 		ticketGraphMigration(),
 		executionMigration(),
+		verificationMigration(),
 	}
 }
 

@@ -796,8 +796,8 @@ func TestPlanningMigrationPreservesLegacyArtifactRefs(t *testing.T) {
 	if len(refs) != 1 || !refs[0].IsLegacy() {
 		t.Fatalf("migrated legacy refs = %+v", refs)
 	}
-	if migrations[len(migrations)-1].Version != 7 {
-		t.Fatalf("planning migration version = %d, want 7", migrations[len(migrations)-1].Version)
+	if migrations[len(migrations)-1].Version != 8 {
+		t.Fatalf("planning migration version = %d, want 8", migrations[len(migrations)-1].Version)
 	}
 }
 

@@ -89,8 +89,8 @@ func TestServerStatusIncludesProjectBootstrapSchema(t *testing.T) {
 	if response.DatabasePath != paths.DatabasePath {
 		t.Fatalf("DatabasePath = %q, want %q", response.DatabasePath, paths.DatabasePath)
 	}
-	if response.SchemaMigrationVersion != 6 || !response.DaemonReadiness {
-		t.Fatalf("status = %+v, want migration version 6 and ready", response)
+	if response.SchemaMigrationVersion != 8 || !response.DaemonReadiness {
+		t.Fatalf("status = %+v, want migration version 8 and ready", response)
 	}
 	if response.DaemonInstanceID != server.InstanceID() || response.DaemonInstanceID == "" {
 		t.Fatalf("DaemonInstanceID = %q, want current non-empty ID %q", response.DaemonInstanceID, server.InstanceID())

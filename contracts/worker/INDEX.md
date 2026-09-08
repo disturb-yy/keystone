@@ -6,7 +6,7 @@
 
 | 文件 | 内容 |
 | --- | --- |
-| `worker.go` | Register、Heartbeat、Pull、Claim、Assignment、Report DTO、Artifact payload 与 `DecodeStrict` |
+| `worker.go` | Register、Heartbeat、Pull、Claim、edit/`kind=verify` Assignment、Report DTO、typed VerificationEvidence 与 `DecodeStrict` |
 | `worker_test.go` | JSON 编码、最小 payload、空 Assignment、未知字段、重复 key、多个值和 body 上限测试 |
 
 ## 当前边界事实
@@ -17,6 +17,7 @@
 - `Assignment` 包含 `agent_run_id`、opaque `lease_token`、Lease/Workspace/Runtime/输入摘要字段；Planning Assignment 以 `result_mode=planning_candidate` 请求候选结果。
 - `edit` Assignment 携带固定 timeout，Worker 必须先提交一次性 RuntimeClaim 才能启动 Runtime。
 - `Report` 包含 exit/time/revision、执行证据与可选 candidate Artifact、capture failure 和 guard finding；authority 仍由 Daemon 解释。
+- `verification-v1` Worker 使用 `kind: verify`，VerificationReport 按命令 ordinal 和 Canonical Criterion 返回；旧 edit Worker 不会收到该变体。
 - 本包没有 HTTP Handler、Daemon、真实 Runtime、Domain、SQLite 或状态推进实现。
 
 ## 验证

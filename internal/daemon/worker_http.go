@@ -215,6 +215,25 @@ func (h *WorkerProtocolHandler) handleReport(w http.ResponseWriter, r *http.Requ
 		writeWorkerAuthorityError(w, err)
 		return
 	}
+	if info, infoErr := h.Authority.VerificationAssignmentInfoFor(r.Context(), workerID, request.AgentRunID, request.LeaseToken); infoErr == nil {
+		candidate, candidateErr := h.Snapshotter.Candidate(r.Context(), info.WorkspacePath, info.InputRevision)
+		if candidateErr != nil || candidate.Branch != info.Branch || candidate.TreeIdentity != info.CandidateTreeIdentity || candidate.HeadRevision != info.InputRevision || candidate.HasUntracked {
+			if fenceErr := h.Authority.FenceVerificationAssignment(r.Context(), request.AgentRunID, "verification_snapshot_changed"); fenceErr != nil && !errors.Is(fenceErr, workstore.ErrWorkerLeaseInvalid) {
+				writeWorkerAuthorityError(w, fenceErr)
+				return
+			}
+			writeWorkerAuthorityError(w, workstore.ErrWorkerReportInvalid)
+			return
+		}
+		diffDigest := sha256.Sum256(candidate.Diff)
+		if snapshotErr := h.Authority.RecordVerificationSnapshot(r.Context(), request.AgentRunID, workstore.VerificationSnapshotInput{Phase: "after", InputRevision: candidate.HeadRevision, HeadRevision: candidate.HeadRevision, Branch: candidate.Branch, ChangedFiles: candidate.ChangedFiles, DiffSHA256: hex.EncodeToString(diffDigest[:]), DiffBytes: int64(len(candidate.Diff)), HasUntracked: candidate.HasUntracked, TreeIdentity: candidate.TreeIdentity}); snapshotErr != nil {
+			writeWorkerAuthorityError(w, snapshotErr)
+			return
+		}
+	} else if !errors.Is(infoErr, workstore.ErrWorkerLeaseInvalid) {
+		writeWorkerAuthorityError(w, infoErr)
+		return
+	}
 	if info, infoErr := h.Authority.ExecutionAssignmentInfoFor(r.Context(), workerID, request.AgentRunID, request.LeaseToken); infoErr == nil {
 		snapshot, snapshotErr := h.Snapshotter.Observe(r.Context(), info.WorkspacePath, info.InputRevision)
 		if snapshotErr != nil && !errors.Is(snapshotErr, workstore.ErrWorkerLeaseInvalid) {

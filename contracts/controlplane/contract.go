@@ -144,12 +144,36 @@ type ChangeExecuteRequest struct {
 	WorkspaceBranch string `json:"workspace_branch,omitempty"`
 }
 
+// ChangeVerifyRequest 是 Ticket Verify 的严格请求体。
+type ChangeVerifyRequest struct {
+	ExpectedVersion int `json:"expected_version"`
+}
+
+// ChangeCommitRequest 是 Ticket Commit 的严格请求体。
+type ChangeCommitRequest struct {
+	ExpectedVersion int `json:"expected_version"`
+}
+
+// ChangeFinalVerifyRequest 是 Change FinalVerify 的严格请求体。
+type ChangeFinalVerifyRequest struct {
+	ExpectedVersion int `json:"expected_version"`
+}
+
 // ExecutionTicketDTO 是 Canonical Ticket 的执行状态摘要。
 type ExecutionTicketDTO struct {
-	TicketID string `json:"ticket_id"`
-	Ordinal  int    `json:"ordinal"`
-	Title    string `json:"title"`
-	State    string `json:"state"`
+	TicketID                      string   `json:"ticket_id"`
+	Ordinal                       int      `json:"ordinal"`
+	Title                         string   `json:"title"`
+	State                         string   `json:"state"`
+	GateStatus                    string   `json:"gate_status,omitempty"`
+	VerificationStatus            string   `json:"verification_status,omitempty"`
+	CommitStatus                  string   `json:"commit_status,omitempty"`
+	VerificationEvidenceID        string   `json:"verification_evidence_id,omitempty"`
+	VerificationCommandStatuses   []string `json:"verification_command_statuses,omitempty"`
+	VerificationCriterionOutcomes []string `json:"verification_criterion_outcomes,omitempty"`
+	InputRevision                 string   `json:"input_revision,omitempty"`
+	CommitBeforeRevision          string   `json:"commit_before_revision,omitempty"`
+	CommitAfterRevision           string   `json:"commit_after_revision,omitempty"`
 }
 
 // ExecutionReadModel 是不暴露 WorkspacePath、Lease、Prompt 或环境的执行查询模型。
@@ -161,12 +185,45 @@ type ExecutionReadModel struct {
 	BaseRevision       string               `json:"base_revision"`
 	InputRevision      string               `json:"input_revision"`
 	Tickets            []ExecutionTicketDTO `json:"tickets"`
+	Stage              string               `json:"stage,omitempty"`
+	ChangeStatus       string               `json:"change_status,omitempty"`
+	Version            int                  `json:"version,omitempty"`
+	PendingIntentIDs   []string             `json:"pending_intent_ids,omitempty"`
+	CandidateRevision  string               `json:"candidate_revision,omitempty"`
+	FinalVerification  string               `json:"final_verification,omitempty"`
+	FinalEvidenceID    string               `json:"final_evidence_id,omitempty"`
 }
 
 // ChangeExecuteResponse 是 Execute 首次接受和同请求重放的安全回执。
 type ChangeExecuteResponse struct {
 	Change    ChangeDTO          `json:"change"`
 	Execution ExecutionReadModel `json:"execution"`
+}
+
+// ChangeVerifyResponse 是 Verify Intent-first 的 202 回执。
+type ChangeVerifyResponse struct {
+	Change             ChangeDTO          `json:"change"`
+	Execution          ExecutionReadModel `json:"execution"`
+	IntentID           string             `json:"intent_id"`
+	VerificationStatus string             `json:"verification_status"`
+}
+
+// ChangeCommitResponse 是 Commit 成功后的安全回执。
+type ChangeCommitResponse struct {
+	Change           ChangeDTO          `json:"change"`
+	Execution        ExecutionReadModel `json:"execution"`
+	KeystoneCommitID string             `json:"keystone_commit_id"`
+	GitOID           string             `json:"git_oid"`
+	ParentRevision   string             `json:"parent_revision"`
+	AfterRevision    string             `json:"after_revision"`
+}
+
+// ChangeFinalVerifyResponse 是 FinalVerify Intent-first 的 202 回执。
+type ChangeFinalVerifyResponse struct {
+	Change             ChangeDTO          `json:"change"`
+	Execution          ExecutionReadModel `json:"execution"`
+	IntentID           string             `json:"intent_id"`
+	VerificationStatus string             `json:"verification_status"`
 }
 
 // HumanDecisionRequest 是 retry 或 cancel 人工决定请求体。

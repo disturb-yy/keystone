@@ -6,6 +6,9 @@
 - secret 只从调用方提供的内存值进入 Authorization header，不写日志、命令行或 Runtime 环境。
 - Register 成功后才能 Pull；一次只执行一个 Assignment；Report `unavailable` 只能重发同一 Report，不能重跑 Runtime。
 - `planning_candidate` Assignment 只让 Runtime 单独采集候选字节；Worker 不解释 schema 或推进 Stage，并在 Report 前拒绝 Snapshot 修改与临时路径泄漏。
+- `kind=verify` Assignment 只进入 `VerificationExecutor`；命令以固定 argv、固定 cwd、超时和
+  `PATH/HOME/TMPDIR/LANG/LC_ALL` 白名单执行，首个失败后后续命令为 `not_run`，不连接 SQLite
+  或执行 Git 写操作。
 - Runtime 取消或 Daemon 停止时，Runner 必须先等待 Runtime 自己完成有界清理，再退出 Worker；
   同一停止预算由 Daemon Supervisor 的进程树围栏覆盖。
 - Client 对没有请求级 Timeout 的自定义 `http.Client` 仍施加有界 deadline，避免失联的

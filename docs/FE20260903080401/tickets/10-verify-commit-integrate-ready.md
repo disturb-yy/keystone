@@ -4,7 +4,7 @@
 - `BLOCKED_BY`：09
 - 交付类型：验证与 Git 收口纵切
 
-> 状态：规划规格已对齐，尚未实现。顶层 Ticket 09 的真实实现与验收仍是硬阻塞；本 Ticket、其规格和子票的 `ready-for-agent` 只表示实施契约已经冻结，不表示 Verify、Commit、Worker V1 扩展或 Integrate Ready 已存在于当前 checkout。
+> 状态：Ticket 10 的 Verify/Commit/FinalVerify 代码已落地并通过目标 package 测试；按用户明确授权跳过 M7 验收，因此 Ticket 09 的真实 Codex、跨平台和端到端证据仍是未解除的前置证据缺口。本状态不把 fake seam、编译或规划文字当作 M7/M8 全量 acceptance evidence。
 
 ## 目标
 

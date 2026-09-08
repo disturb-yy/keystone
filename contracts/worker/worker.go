@@ -18,6 +18,10 @@ const (
 
 	// ResultModePlanningCandidate 要求 Runtime 单独返回可由 Daemon 校验的候选结果。
 	ResultModePlanningCandidate = "planning_candidate"
+	// AssignmentKindVerify 标识 capability-gated 的只读验证 Assignment。
+	AssignmentKindVerify = "verify"
+	// VerificationCapability 是支持 M8 验证协议的精确 Worker capability。
+	VerificationCapability = "verification-v1"
 )
 
 // Outcome 表示 Worker 对一次 AgentRun 执行结果的传输值。
@@ -94,6 +98,9 @@ type ClaimResponse struct {
 
 // Assignment 表示 Daemon 下发给 Worker 的最小执行关联信息。
 type Assignment struct {
+	// Kind 为空表示既有 edit Assignment；verify 只向新 capability Worker 发送。
+	Kind string `json:"kind,omitempty"`
+
 	// AgentRunID 关联被分配的 AgentRun 传输标识。
 	AgentRunID string `json:"agent_run_id"`
 
@@ -132,6 +139,76 @@ type Assignment struct {
 
 	// InputArtifacts 是输入证据摘要，不携带物理路径。
 	InputArtifacts []ArtifactSummary `json:"input_artifacts,omitempty"`
+
+	// Verification 是 kind=verify 时的固定策略、revision 和审查输入。
+	Verification *VerificationAssignment `json:"verification,omitempty"`
+}
+
+// VerificationAssignment 是由 Daemon 派生的只读验证输入。
+type VerificationAssignment struct {
+	IntentID              string                   `json:"intent_id"`
+	TicketID              string                   `json:"ticket_id,omitempty"`
+	Final                 bool                     `json:"final"`
+	PolicyDigest          string                   `json:"policy_digest"`
+	InputRevision         string                   `json:"input_revision"`
+	CandidateTreeIdentity string                   `json:"candidate_tree_identity"`
+	Commands              []VerificationCommand    `json:"commands"`
+	Criteria              []AcceptanceCriterionRef `json:"criteria"`
+	ReviewInput           string                   `json:"review_input"`
+}
+
+// VerificationCommand 是不经 shell 解释的固定命令。
+type VerificationCommand struct {
+	Name           string   `json:"name"`
+	Argv           []string `json:"argv"`
+	TimeoutSeconds int      `json:"timeout_seconds"`
+}
+
+// AcceptanceCriterionRef 是 Daemon 对 Canonical criterion 的受限投影。
+type AcceptanceCriterionRef struct {
+	TicketID   string `json:"ticket_id"`
+	Ordinal    int    `json:"ordinal"`
+	Text       string `json:"text"`
+	TextSHA256 string `json:"text_sha256"`
+}
+
+// VerificationReport 是 Verifier 返回的结构化结果；不使用通用 Artifacts。
+type VerificationReport struct {
+	IntentID              string                        `json:"intent_id"`
+	Outcome               Outcome                       `json:"outcome"`
+	Commands              []VerificationCommandResult   `json:"commands"`
+	Criteria              []VerificationCriterionResult `json:"criteria"`
+	ReviewSummary         string                        `json:"review_summary"`
+	CandidateTreeIdentity string                        `json:"candidate_tree_identity"`
+	AfterRevision         string                        `json:"after_revision"`
+	GuardFindings         []string                      `json:"guard_findings,omitempty"`
+}
+
+// VerificationCommandResult 是单条验证命令的受限输出摘要。
+type VerificationCommandResult struct {
+	Ordinal  int                  `json:"ordinal"`
+	Name     string               `json:"name"`
+	Status   string               `json:"status"`
+	ExitCode *int                 `json:"exit_code,omitempty"`
+	Stdout   VerificationEvidence `json:"stdout"`
+	Stderr   VerificationEvidence `json:"stderr"`
+}
+
+// VerificationCriterionResult 是一条 Acceptance Criterion 的审查结果。
+type VerificationCriterionResult struct {
+	TicketID    string   `json:"ticket_id"`
+	Ordinal     int      `json:"ordinal"`
+	TextSHA256  string   `json:"text_sha256"`
+	Outcome     string   `json:"outcome"`
+	EvidenceIDs []string `json:"evidence_ids"`
+}
+
+// VerificationEvidence 是命令输出的类型化、受限内容身份。
+type VerificationEvidence struct {
+	ContentBase64 string `json:"content_base64"`
+	SHA256        string `json:"sha256"`
+	SizeBytes     int64  `json:"size_bytes"`
+	Truncated     bool   `json:"truncated"`
 }
 
 // ArtifactSummary 描述 Assignment 输入 Artifact 的稳定摘要。
@@ -177,6 +254,9 @@ type Report struct {
 
 	// CaptureFailures 记录独立采集失败，不使用 Runtime 自报替代。
 	CaptureFailures []CaptureFailure `json:"capture_failures,omitempty"`
+
+	// Verification 仅在 Assignment.Kind=verify 时允许出现。
+	Verification *VerificationReport `json:"verification,omitempty"`
 }
 
 // Artifact 是 Report 中的有界证据内容。

@@ -23,6 +23,7 @@ var (
 	ErrRevisionMismatch      = errors.New("source revision does not match")
 	ErrBranchConflict        = errors.New("source branch conflicts")
 	ErrWorkspaceConflict     = errors.New("workspace identity conflicts")
+	ErrCommitNotFound        = errors.New("controlled commit is not present at HEAD")
 	ErrUnsupportedRepository = errors.New("source repository topology is unsupported")
 	ErrGitUnavailable        = errors.New("git is unavailable")
 )
@@ -58,6 +59,8 @@ type Snapshot struct {
 	Diff         []byte
 	ChangedFiles []string
 	HasUntracked bool
+	// TreeIdentity 是把当前候选纳入临时 index 后得到的 tree object identity。
+	TreeIdentity string
 }
 
 // Provision 校验源、branch 和物理身份后创建或恢复唯一 Worktree。
@@ -138,6 +141,22 @@ func (a Adapter) Observe(ctx context.Context, workspace, expectedRevision string
 		return Snapshot{}, fmt.Errorf("observe workspace status: %w", ErrGitUnavailable)
 	}
 	return Snapshot{HeadRevision: headValue, Branch: strings.TrimSpace(string(branch)), Diff: append([]byte(nil), diff...), ChangedFiles: files, HasUntracked: untracked}, nil
+}
+
+// ReadManifestAtRevision 从固定 BaseRevision 读取策略文件，不读取候选 Workspace 的当前内容。
+func (a Adapter) ReadManifestAtRevision(ctx context.Context, workspace, revision string) ([]byte, error) {
+	if ctx == nil {
+		return nil, fmt.Errorf("read manifest revision: %w", ErrInvalidRequest)
+	}
+	path, err := normalizeExistingDir(workspace)
+	if err != nil || !validRevision(revision) {
+		return nil, fmt.Errorf("read manifest revision: %w", ErrInvalidRequest)
+	}
+	content, err := a.output(ctx, path, "show", revision+":.keystone/project.yaml")
+	if err != nil {
+		return nil, fmt.Errorf("read manifest revision: %w", ErrRevisionMismatch)
+	}
+	return append([]byte(nil), content...), nil
 }
 
 func (a Adapter) preflightSource(ctx context.Context, root, revision string) error {

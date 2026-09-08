@@ -66,6 +66,77 @@ func TestAdapterRejectsDirtySource(t *testing.T) {
 	}
 }
 
+func TestAdapterCandidateAndCommitUseExpectedTreeAndParent(t *testing.T) {
+	root := t.TempDir()
+	initTestRepository(t, root)
+	base := strings.TrimSpace(runGit(t, root, "rev-parse", "HEAD"))
+	workspace := filepath.Join(t.TempDir(), "workspace")
+	if _, err := (Adapter{}).Provision(context.Background(), ProvisionRequest{RepositoryRoot: root, WorkspacePath: workspace, Branch: "keystone/change/commit", BaseRevision: base}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "new.txt"), []byte("candidate\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	candidate, err := (Adapter{}).Candidate(context.Background(), workspace, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if candidate.TreeIdentity == "" || !candidate.HasUntracked {
+		t.Fatalf("candidate identity = %+v", candidate)
+	}
+	runGit(t, workspace, "add", "-N", "--", "new.txt")
+	result, err := (Adapter{}).Commit(context.Background(), CommitRequest{WorkspacePath: workspace, ExpectedParent: base, ExpectedTree: candidate.TreeIdentity, Message: "controlled commit\n\nKeystone-Change-ID: change\nKeystone-Ticket-ID: ticket\nKeystone-Commit-ID: commit"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ParentRevision != base || result.AfterRevision == base || result.TreeIdentity != candidate.TreeIdentity {
+		t.Fatalf("commit result = %+v", result)
+	}
+	if status := runGit(t, workspace, "status", "--porcelain"); status != "" {
+		t.Fatalf("workspace is dirty after commit: %q", status)
+	}
+}
+
+func TestAdapterReadsManifestFromBaseRevision(t *testing.T) {
+	root := t.TempDir()
+	initTestRepository(t, root)
+	if err := os.MkdirAll(filepath.Join(root, ".keystone"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".keystone", "project.yaml"), []byte("version: 1\nbase: true\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, root, "add", ".keystone/project.yaml")
+	runGit(t, root, "commit", "-qm", "manifest")
+	base := strings.TrimSpace(runGit(t, root, "rev-parse", "HEAD"))
+	workspace := filepath.Join(t.TempDir(), "workspace")
+	if _, err := (Adapter{}).Provision(context.Background(), ProvisionRequest{RepositoryRoot: root, WorkspacePath: workspace, Branch: "keystone/change/manifest", BaseRevision: base}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, ".keystone", "project.yaml"), []byte("version: 2\nproject_id: changed\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	content, err := (Adapter{}).ReadManifestAtRevision(context.Background(), workspace, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != "version: 1\nbase: true\n" {
+		t.Fatalf("base manifest = %q", content)
+	}
+}
+
+func initTestRepository(t *testing.T, root string) {
+	t.Helper()
+	runGit(t, root, "init", "-q")
+	runGit(t, root, "config", "user.email", "test@example.com")
+	runGit(t, root, "config", "user.name", "Test")
+	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("base\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, root, "add", "README.md")
+	runGit(t, root, "commit", "-qm", "base")
+}
+
 func TestParseStatusIncludesRenameSourceAndTarget(t *testing.T) {
 	files, untracked, err := parseStatus([]byte("R  old.txt\x00new.txt\x00?? untracked.txt\x00"))
 	if err != nil {

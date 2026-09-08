@@ -47,7 +47,7 @@ Ticket 描述的是已确认的实现契约，不替代 `docs/architecture-basel
 | [07](07-understand-design-plan.md) | M5 | 06 | [规格](07-understand-design-plan/spec/07-understand-design-plan-spec.md)；自动产生可验证的 Understanding、Design、Plan Artifact |
 | [08](08-ticketize-canonical-graph.md) | M6 | 07 | Plan 形成持久化、无环的 Canonical Ticket Graph |
 | [09](09-worktree-execute-diff.md) | M7 | 06、08 | Ticket 在 Change Worktree 内形成独立采集的 Diff |
-| [10](10-verify-commit-integrate-ready.md) | M8 | 09 | 独立 Verify、Keystone Commit 与 Integrate Ready |
+| [10](10-verify-commit-integrate-ready.md) | M8 | 09（用户授权跳过验收，证据缺口保留） | 独立 Verify、Keystone Commit 与 Integrate Ready；代码已落地，M7/M8 全量 acceptance 仍需真实环境证据 |
 | [11](11-dashboard-observation.md) | M9 | 10 | [规格](11-dashboard-observation/spec/11-dashboard-observation-spec.md)；四页面 Dashboard、Query/SSE 观察与有限 Command/Decision |
 | [12](12-golden-path-e2e.md) | M9 | 11 | [规格](12-golden-path-e2e/spec/12-golden-path-e2e-spec.md)；真实 Golden Path 的可复盘验收证据 |
 

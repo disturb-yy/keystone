@@ -128,6 +128,47 @@ func TestEnsureRejectsNonRFCVariantUUIDv7Manifest(t *testing.T) {
 	}
 }
 
+func TestParseV2PreservesCommandOrderAndSemanticDigest(t *testing.T) {
+	id := domain.NewProjectID()
+	first := []byte("# policy\nversion: 2\nproject_id: \"" + string(id) + "\"\nverify:\n  commands:\n    - name: go-test\n      argv: [\"go\", \"test\", \"./...\"]\n      timeout_seconds: 900\ncommit:\n  template: \"{ticket_title}\"\n")
+	second := []byte("version: 2\nproject_id: " + string(id) + "\nverify:\n  commands:\n    - name: go-test\n      argv: [go, test, ./...] # same values\n      timeout_seconds: 900\ncommit:\n  template: '{ticket_title}'\n")
+	left, err := ParseV2(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	right, err := ParseV2(second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leftCommand, leftTemplate, err := left.Digests()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rightCommand, rightTemplate, err := right.Digests()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if leftCommand != rightCommand || leftTemplate != rightTemplate || len(left.VerifyCommands) != 1 || left.VerifyCommands[0].Argv[2] != "./..." {
+		t.Fatalf("semantic digest or command mismatch: left=%+v/%s/%s right=%+v/%s/%s", left, leftCommand, leftTemplate, right, rightCommand, rightTemplate)
+	}
+}
+
+func TestParseV2RejectsUnknownDuplicateAndMultiDocument(t *testing.T) {
+	id := domain.NewProjectID()
+	base := "version: 2\nproject_id: " + string(id) + "\nverify:\n  commands:\n    - name: check\n      argv: [go, test]\n      timeout_seconds: 30\n"
+	for name, content := range map[string]string{
+		"unknown":        base + "unknown: value\n",
+		"duplicate":      "version: 2\nversion: 2\nproject_id: " + string(id) + "\nverify:\n  commands:\n    - name: check\n      argv: [go, test]\n      timeout_seconds: 30\n",
+		"multi document": base + "---\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := ParseV2([]byte(content)); !errors.Is(err, domain.ErrManifestInvalid) {
+				t.Fatalf("ParseV2() error = %v, want ErrManifestInvalid", err)
+			}
+		})
+	}
+}
+
 func TestEnsureCleansIncompleteCreatedFileAndRetryCanRecover(t *testing.T) {
 	root := t.TempDir()
 	binding := domain.RepositoryBinding{Root: root, ManifestPath: filepath.Join(root, ".keystone", "project.yaml")}

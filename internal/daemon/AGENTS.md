@@ -20,6 +20,11 @@
 - Planning composition 只连接 `planning.Coordinator`、Repository Snapshot、Artifact store 与
   Workstore Worker authority；启动和事件唤醒都必须重新扫描耐久状态，不把内存信号当作事实。
 - V1 Planning 只在 Daemon 内部触发；HTTP 路由不提供 Planning start endpoint。
+- Verify、Commit、FinalVerify Handler 只接收 `expected_version` 和 `Idempotency-Key`，由
+  Workstore 固定 policy/revision/evidence；Worker Report 前由 Daemon 独立复核候选身份。Commit
+  只使用 SourceControl 的受控 parent/tree/trailer seam，HTTP 不直接写 SQL/Git。
+- ExecutionReadModel 只返回 gate、Intent、Evidence、Commit 和 CandidateRevision 摘要，不返回
+  WorkspacePath、Lease/token、Prompt、环境或原始命令输出。
 - stop 命令不依赖数据库；关闭顺序必须是 Planning Manager、Worker Supervisor、临时 Snapshot、
   HTTP Server、数据库、元数据、锁。若前置循环未在预算内停稳，Snapshot 清理必须延后并
   返回可观察错误，不能把未确认停止当成成功。

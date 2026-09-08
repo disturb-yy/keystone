@@ -41,6 +41,8 @@ type RunnerConfig struct {
 	Environment        func() []string
 	Now                func() time.Time
 	Sleep              func(context.Context, time.Duration) error
+	// Verifier 是 kind=verify Assignment 的固定执行器；nil 使用只读 CommandVerifier。
+	Verifier VerificationExecutor
 }
 
 // Runner 执行 Register → Heartbeat/Pull → Runtime → Report 顺序。
@@ -50,6 +52,11 @@ type Runner struct {
 
 type runtimeStopResult struct {
 	value execution.RuntimeResult
+	err   error
+}
+
+type verificationStopResult struct {
+	value workercontract.VerificationReport
 	err   error
 }
 
@@ -75,6 +82,9 @@ func NewRunner(config RunnerConfig) (*Runner, error) {
 	}
 	if config.Sleep == nil {
 		config.Sleep = sleepContext
+	}
+	if config.Verifier == nil {
+		config.Verifier = CommandVerifier{}
 	}
 	return &Runner{config: config}, nil
 }
@@ -115,6 +125,9 @@ func (r *Runner) Run(ctx context.Context) error {
 }
 
 func (r *Runner) executeAssignment(ctx context.Context, assignment workercontract.Assignment) error {
+	if assignment.Kind == workercontract.AssignmentKindVerify {
+		return r.executeVerificationAssignment(ctx, assignment)
+	}
 	if assignment.ExecutionMode == "edit" {
 		claimID, err := newRuntimeClaimID()
 		if err != nil {
@@ -152,6 +165,32 @@ func (r *Runner) executeAssignment(ctx context.Context, assignment workercontrac
 	}
 	report := ReportFromRuntime(assignment, result, runErr, r.now())
 	return r.reportWithRetry(ctx, report)
+}
+
+func (r *Runner) executeVerificationAssignment(ctx context.Context, assignment workercontract.Assignment) error {
+	if assignment.Verification == nil {
+		return fmt.Errorf("verification assignment is missing its fixed input")
+	}
+	var report workercontract.VerificationReport
+	var runErr error
+	report, runErr = r.verifyWithHeartbeat(ctx, assignment, func(runContext context.Context) (workercontract.VerificationReport, error) {
+		return r.config.Verifier.Verify(runContext, *assignment.Verification, assignment.WorkspacePath, r.config.EnvironmentValue())
+	})
+	if runErr != nil {
+		return r.reportWithRetry(ctx, workercontract.Report{AgentRunID: assignment.AgentRunID, LeaseToken: assignment.LeaseToken, Attempt: assignment.Attempt, Outcome: workercontract.Outcome("failed"), FailureReason: "verification_executor_failed", Verification: &report, StartedAt: r.now().Format(time.RFC3339Nano), CompletedAt: r.now().Format(time.RFC3339Nano)})
+	}
+	outcome := workercontract.Outcome("succeeded")
+	if report.Outcome == workercontract.Outcome("failed") {
+		outcome = workercontract.Outcome("failed")
+	}
+	return r.reportWithRetry(ctx, workercontract.Report{AgentRunID: assignment.AgentRunID, LeaseToken: assignment.LeaseToken, Attempt: assignment.Attempt, Outcome: outcome, Verification: &report, StartedAt: r.now().Format(time.RFC3339Nano), CompletedAt: r.now().Format(time.RFC3339Nano)})
+}
+
+func (c RunnerConfig) EnvironmentValue() []string {
+	if c.Environment == nil {
+		return nil
+	}
+	return c.Environment()
 }
 
 func newRuntimeClaimID() (string, error) {
@@ -285,6 +324,45 @@ func (r *Runner) runWithHeartbeat(ctx context.Context, assignment workercontract
 			cancel()
 			return r.waitRuntimeStop(resultCh, ctx.Err())
 		}
+	}
+}
+
+func (r *Runner) verifyWithHeartbeat(ctx context.Context, assignment workercontract.Assignment, verify func(context.Context) (workercontract.VerificationReport, error)) (workercontract.VerificationReport, error) {
+	resultCh := make(chan verificationStopResult, 1)
+	verifyContext, cancel := context.WithCancel(ctx)
+	defer cancel()
+	go func() {
+		value, err := verify(verifyContext)
+		resultCh <- verificationStopResult{value: value, err: err}
+	}()
+	ticker := time.NewTicker(r.config.HeartbeatInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case value := <-resultCh:
+			return value.value, value.err
+		case <-ticker.C:
+			heartbeatErr := r.waitHeartbeat(ctx, assignment.AgentRunID, leaseTokenDigest(assignment.LeaseToken))
+			if heartbeatErr == nil {
+				continue
+			}
+			cancel()
+			return r.waitVerificationStop(resultCh, heartbeatErr)
+		case <-ctx.Done():
+			cancel()
+			return r.waitVerificationStop(resultCh, ctx.Err())
+		}
+	}
+}
+
+func (r *Runner) waitVerificationStop(resultCh <-chan verificationStopResult, cause error) (workercontract.VerificationReport, error) {
+	timer := time.NewTimer(r.config.RuntimeStopTimeout)
+	defer timer.Stop()
+	select {
+	case value := <-resultCh:
+		return value.value, errors.Join(cause, value.err)
+	case <-timer.C:
+		return workercontract.VerificationReport{}, errors.Join(cause, errors.New("verification shutdown timed out"))
 	}
 }
 

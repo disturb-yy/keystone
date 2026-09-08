@@ -26,12 +26,48 @@ func (c *cli) newChangeCommand() *cobra.Command {
 	change.AddCommand(c.newChangeShowCommand())
 	change.AddCommand(c.newChangeTicketGraphCommand())
 	change.AddCommand(c.newChangeExecuteCommand())
+	change.AddCommand(c.newChangeVerifyCommand())
+	change.AddCommand(c.newChangeCommitCommand())
+	change.AddCommand(c.newChangeFinalVerifyCommand())
 	change.AddCommand(c.newChangeExecutionCommand())
 	change.AddCommand(c.newChangeControlCommand("pause"))
 	change.AddCommand(c.newChangeControlCommand("resume"))
 	change.AddCommand(c.newChangeControlCommand("cancel"))
 	change.AddCommand(c.newChangeDecisionCommand())
 	return change
+}
+
+func (c *cli) newChangeVerifyCommand() *cobra.Command {
+	var key string
+	var version int
+	command := &cobra.Command{Use: "verify CHANGE_ID TICKET_ID", Short: "提交 Ticket Verify", Args: cobra.ExactArgs(2), RunE: func(cmd *cobra.Command, args []string) error {
+		return c.changeVerify(cmd.Context(), cmd.OutOrStdout(), args[0], args[1], version, key)
+	}}
+	command.Flags().IntVar(&version, "expected-version", 0, "观察到的 Change version")
+	command.Flags().StringVar(&key, "idempotency-key", "", "幂等键")
+	return command
+}
+
+func (c *cli) newChangeCommitCommand() *cobra.Command {
+	var key string
+	var version int
+	command := &cobra.Command{Use: "commit CHANGE_ID TICKET_ID", Short: "提交 Ticket Commit", Args: cobra.ExactArgs(2), RunE: func(cmd *cobra.Command, args []string) error {
+		return c.changeCommit(cmd.Context(), cmd.OutOrStdout(), args[0], args[1], version, key)
+	}}
+	command.Flags().IntVar(&version, "expected-version", 0, "观察到的 Change version")
+	command.Flags().StringVar(&key, "idempotency-key", "", "幂等键")
+	return command
+}
+
+func (c *cli) newChangeFinalVerifyCommand() *cobra.Command {
+	var key string
+	var version int
+	command := &cobra.Command{Use: "final-verify CHANGE_ID", Short: "提交 Change FinalVerify", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		return c.changeFinalVerify(cmd.Context(), cmd.OutOrStdout(), args[0], version, key)
+	}}
+	command.Flags().IntVar(&version, "expected-version", 0, "观察到的 Change version")
+	command.Flags().StringVar(&key, "idempotency-key", "", "幂等键")
+	return command
 }
 
 func (c *cli) newChangeExecuteCommand() *cobra.Command {
@@ -236,6 +272,60 @@ func (c *cli) changeExecute(ctx context.Context, out io.Writer, changeID string,
 		return err
 	}
 	response, err := c.client().changeExecute(ctx, metadata.Endpoint, key, changeID, controlplane.ChangeExecuteRequest{ExpectedVersion: version, WorkspaceBranch: branch})
+	if err != nil {
+		return err
+	}
+	return writeJSONOutput(out, response)
+}
+
+func (c *cli) changeVerify(ctx context.Context, out io.Writer, changeID, ticketID string, version int, key string) error {
+	if version < 1 || key == "" {
+		return newCLIError(ErrorChangeFailed, "change verify 需要 expected-version 和 idempotency-key", nil)
+	}
+	if err := controlplane.ValidateChangeID(changeID); err != nil {
+		return newCLIError(ErrorChangeFailed, "change_id 无效", err)
+	}
+	metadata, err := c.ensureDaemon(ctx)
+	if err != nil {
+		return err
+	}
+	response, err := c.client().changeVerify(ctx, metadata.Endpoint, key, changeID, ticketID, controlplane.ChangeVerifyRequest{ExpectedVersion: version})
+	if err != nil {
+		return err
+	}
+	return writeJSONOutput(out, response)
+}
+
+func (c *cli) changeCommit(ctx context.Context, out io.Writer, changeID, ticketID string, version int, key string) error {
+	if version < 1 || key == "" {
+		return newCLIError(ErrorChangeFailed, "change commit 需要 expected-version 和 idempotency-key", nil)
+	}
+	if err := controlplane.ValidateChangeID(changeID); err != nil {
+		return newCLIError(ErrorChangeFailed, "change_id 无效", err)
+	}
+	metadata, err := c.ensureDaemon(ctx)
+	if err != nil {
+		return err
+	}
+	response, err := c.client().changeCommit(ctx, metadata.Endpoint, key, changeID, ticketID, controlplane.ChangeCommitRequest{ExpectedVersion: version})
+	if err != nil {
+		return err
+	}
+	return writeJSONOutput(out, response)
+}
+
+func (c *cli) changeFinalVerify(ctx context.Context, out io.Writer, changeID string, version int, key string) error {
+	if version < 1 || key == "" {
+		return newCLIError(ErrorChangeFailed, "change final-verify 需要 expected-version 和 idempotency-key", nil)
+	}
+	if err := controlplane.ValidateChangeID(changeID); err != nil {
+		return newCLIError(ErrorChangeFailed, "change_id 无效", err)
+	}
+	metadata, err := c.ensureDaemon(ctx)
+	if err != nil {
+		return err
+	}
+	response, err := c.client().changeFinalVerify(ctx, metadata.Endpoint, key, changeID, controlplane.ChangeFinalVerifyRequest{ExpectedVersion: version})
 	if err != nil {
 		return err
 	}

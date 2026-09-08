@@ -20,7 +20,9 @@ import (
 	"unicode/utf8"
 
 	workercontract "github.com/disturb-yy/keystone/contracts/worker"
+	governancedomain "github.com/disturb-yy/keystone/internal/governance/domain"
 	"github.com/disturb-yy/keystone/internal/infrastructure/id"
+	"github.com/disturb-yy/keystone/internal/infrastructure/manifest"
 	"github.com/disturb-yy/keystone/internal/work/domain"
 )
 
@@ -542,6 +544,11 @@ func (s *Store) PullAssignment(ctx context.Context, workerID string) (*workercon
 	if err := s.forgetTerminalLeaseTokens(ctx); err != nil {
 		return nil, err
 	}
+	if assignment, err := s.IssueNextVerificationAssignment(ctx, workerID); err != nil {
+		return nil, err
+	} else if assignment != nil {
+		return assignment, nil
+	}
 	var leaseID, agentRunID, state, expires, workspaceID, workspacePath, runtime, resultMode, executionMode, instruction, beforeRevision, inputJSON string
 	var attempt, timeoutSeconds int
 	err := s.db.QueryRowContext(ctx, `SELECT lease_id, agent_run_id, state, expires_at, workspace_id, workspace_path, runtime, result_mode, execution_mode, instruction, before_revision, attempt, timeout_seconds, input_artifacts_json FROM t_worker_leases WHERE worker_id = ? AND state = 'active' ORDER BY created_at, lease_id LIMIT 1`, workerID).Scan(&leaseID, &agentRunID, &state, &expires, &workspaceID, &workspacePath, &runtime, &resultMode, &executionMode, &instruction, &beforeRevision, &attempt, &timeoutSeconds, &inputJSON)
@@ -561,6 +568,12 @@ func (s *Store) PullAssignment(ctx context.Context, workerID string) (*workercon
 	if token == "" {
 		return nil, fmt.Errorf("worker lease secret is unavailable: %w", ErrWorkerUnavailable)
 	}
+	var verificationIntentID string
+	if err := s.db.QueryRowContext(ctx, `SELECT intent_id FROM t_verification_intents WHERE agent_run_id = ?`, agentRunID).Scan(&verificationIntentID); err == nil {
+		return s.loadVerificationAssignment(ctx, verificationIntentID, agentRunID, leaseID, token, expires, workspaceID, workspacePath, beforeRevision, attempt)
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return nil, fmt.Errorf("read verification assignment: %w", ErrWorkerUnavailable)
+	}
 	return &workercontract.Assignment{
 		AgentRunID:     agentRunID,
 		LeaseToken:     token,
@@ -576,6 +589,36 @@ func (s *Store) PullAssignment(ctx context.Context, workerID string) (*workercon
 		Attempt:        attempt,
 		InputArtifacts: inputs,
 	}, nil
+}
+
+func (s *Store) loadVerificationAssignment(ctx context.Context, intentID, agentRunID, leaseID, token, expires, workspaceID, workspacePath, inputRevision string, attempt int) (*workercontract.Assignment, error) {
+	var ticketID, policyDigest, treeIdentity, commandsJSON string
+	var final int
+	err := s.db.QueryRowContext(ctx, `SELECT intent.ticket_id, intent.policy_digest, intent.candidate_tree_identity, snapshot.commands_json, intent.final FROM t_verification_intents intent JOIN t_verification_policy_snapshots snapshot ON snapshot.snapshot_id = intent.policy_snapshot_id WHERE intent.intent_id = ?`, intentID).Scan(&ticketID, &policyDigest, &treeIdentity, &commandsJSON, &final)
+	if err != nil {
+		return nil, fmt.Errorf("read verification assignment policy: %w", ErrWorkerUnavailable)
+	}
+	var commands []manifest.V2Command
+	if err := json.Unmarshal([]byte(commandsJSON), &commands); err != nil {
+		return nil, fmt.Errorf("decode verification assignment policy: %w", ErrWorkerUnavailable)
+	}
+	var changeID string
+	if err := s.db.QueryRowContext(ctx, `SELECT change_id FROM t_verification_intents WHERE intent_id = ?`, intentID).Scan(&changeID); err != nil {
+		return nil, fmt.Errorf("read verification assignment change: %w", ErrWorkerUnavailable)
+	}
+	criteria, err := readVerificationCriteria(ctx, s.db, changeID, ticketID, final != 0)
+	if err != nil {
+		return nil, err
+	}
+	reviewInput, err := verificationReviewInput(changeID, ticketID, criteria)
+	if err != nil {
+		return nil, err
+	}
+	verificationCommands := make([]workercontract.VerificationCommand, 0, len(commands))
+	for _, command := range commands {
+		verificationCommands = append(verificationCommands, workercontract.VerificationCommand{Name: command.Name, Argv: command.Argv, TimeoutSeconds: command.TimeoutSeconds})
+	}
+	return &workercontract.Assignment{Kind: workercontract.AssignmentKindVerify, AgentRunID: agentRunID, LeaseToken: token, WorkspaceID: workspaceID, WorkspacePath: workspacePath, Runtime: "verification", ExecutionMode: "inspect", TimeoutSeconds: 1800, LeaseExpiresAt: expires, BeforeRevision: inputRevision, Attempt: attempt, Verification: &workercontract.VerificationAssignment{IntentID: intentID, TicketID: ticketID, Final: final != 0, PolicyDigest: policyDigest, InputRevision: inputRevision, CandidateTreeIdentity: treeIdentity, Commands: verificationCommands, Criteria: criteria, ReviewInput: reviewInput}}, nil
 }
 
 // ClaimExecution 原子绑定唯一 RuntimeClaim；重复提交同一 Claim 只返回 duplicate。
@@ -659,6 +702,9 @@ func (s *Store) reportWorker(ctx context.Context, workerID string, request worke
 	if (request.Outcome != workercontract.Outcome(domain.AgentRunOutcomeSucceeded) && request.Outcome != workercontract.Outcome(domain.AgentRunOutcomeFailed)) || request.Attempt < 0 {
 		return workercontract.ReportResponse{}, ErrWorkerReportInvalid
 	}
+	if request.Verification != nil && len(request.Artifacts) != 0 {
+		return workercontract.ReportResponse{}, ErrWorkerReportInvalid
+	}
 	prepared, err := prepareReportArtifacts(request)
 	if err != nil {
 		return workercontract.ReportResponse{}, err
@@ -716,6 +762,13 @@ func (s *Store) reportWorker(ctx context.Context, workerID string, request worke
 	if executionInfoErr != nil {
 		return workercontract.ReportResponse{}, fmt.Errorf("read execution report identity: %w", ErrWorkerUnavailable)
 	}
+	verificationIntentID, verificationErr := verificationIntentForRun(ctx, tx, run.ID)
+	if verificationErr != nil {
+		return workercontract.ReportResponse{}, fmt.Errorf("read verification report identity: %w", ErrWorkerUnavailable)
+	}
+	if request.Verification != nil && verificationIntentID == "" {
+		return workercontract.ReportResponse{}, ErrWorkerReportInvalid
+	}
 	if !planningCandidateMode && reportHasCaptureFailures(request) && !executionRun {
 		return workercontract.ReportResponse{}, fmt.Errorf("worker evidence capture failed: %w", ErrWorkerUnavailable)
 	}
@@ -751,9 +804,15 @@ func (s *Store) reportWorker(ctx context.Context, workerID string, request worke
 	attemptMatches := request.Attempt == 0 || request.Attempt == run.Attempt
 	current := run.Status == domain.AgentRunStatusRunning && lease.State == "active" && deadlineErr == nil && now.Before(deadline) && lease.Attempt == run.Attempt && attemptMatches
 	if current {
-		currentRun, currentErr := isCurrentAgentRun(ctx, tx, change, run)
-		if planningCandidateMode {
+		var currentRun bool
+		var currentErr error
+		switch {
+		case planningCandidateMode:
 			currentRun, currentErr = isCurrentPlanningRun(ctx, tx, change, run)
+		case verificationIntentID != "":
+			currentRun, currentErr = isCurrentVerificationRun(ctx, tx, change, run, verificationIntentID)
+		default:
+			currentRun, currentErr = isCurrentAgentRun(ctx, tx, change, run)
 		}
 		if currentErr != nil {
 			return workercontract.ReportResponse{}, fmt.Errorf("check current worker run: %w", ErrWorkerUnavailable)
@@ -764,6 +823,9 @@ func (s *Store) reportWorker(ctx context.Context, workerID string, request worke
 	}
 	if executionRun && current {
 		return s.persistExecutionReport(ctx, tx, request, digest, prepared, run, change, lease, artifacts, ticketID, authorizationID, sessionID, epochID)
+	}
+	if verificationIntentID != "" && current {
+		return s.persistVerificationReport(ctx, tx, request, digest, run, change, lease, verificationIntentID)
 	}
 	if !current {
 		if lease.State == "active" {
@@ -901,6 +963,250 @@ func executionRunInfo(ctx context.Context, tx *sql.Tx, runID domain.AgentRunID) 
 		return "", "", "", "", false, err
 	}
 	return ticketID, authorizationID, sessionID, epochID, true, nil
+}
+
+func verificationIntentForRun(ctx context.Context, tx *sql.Tx, runID domain.AgentRunID) (string, error) {
+	var intentID string
+	err := tx.QueryRowContext(ctx, `SELECT intent_id FROM t_verification_intents WHERE agent_run_id = ?`, runID).Scan(&intentID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return intentID, err
+}
+
+func isCurrentVerificationRun(ctx context.Context, tx *sql.Tx, change domain.Change, run domain.AgentRun, intentID string) (bool, error) {
+	var ticketID string
+	var final int
+	var status string
+	if err := tx.QueryRowContext(ctx, `SELECT ticket_id, final, status FROM t_verification_intents WHERE intent_id = ? AND agent_run_id = ?`, intentID, run.ID).Scan(&ticketID, &final, &status); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, nil
+		}
+		return false, err
+	}
+	expectedChangeStage := domain.LifecycleStageExecute
+	expectedRunStage := domain.LifecycleStageVerify
+	if final != 0 {
+		expectedChangeStage = domain.LifecycleStageVerify
+		expectedRunStage = domain.LifecycleStageFinalVerify
+	}
+	if status != governancedomain.VerificationPending && status != governancedomain.VerificationRunning || change.Status != domain.ChangeStatusActive || change.Stage != expectedChangeStage || run.Stage != expectedRunStage {
+		return false, nil
+	}
+	return true, nil
+}
+
+func (s *Store) persistVerificationReport(ctx context.Context, tx *sql.Tx, request workercontract.Report, digest string, run domain.AgentRun, change domain.Change, lease workerLease, intentID string) (workercontract.ReportResponse, error) {
+	if request.Verification == nil || request.Verification.IntentID != intentID || request.Verification.CandidateTreeIdentity == "" {
+		return workercontract.ReportResponse{}, ErrWorkerReportInvalid
+	}
+	var ticketID, inputRevision, expectedTree, currentStatus string
+	var final int
+	err := tx.QueryRowContext(ctx, `SELECT ticket_id, input_revision, candidate_tree_identity, final, status FROM t_verification_intents WHERE intent_id = ?`, intentID).Scan(&ticketID, &inputRevision, &expectedTree, &final, &currentStatus)
+	if err != nil {
+		return workercontract.ReportResponse{}, fmt.Errorf("read verification intent: %w", ErrWorkerUnavailable)
+	}
+	if currentStatus != governancedomain.VerificationPending && currentStatus != governancedomain.VerificationRunning || request.Verification.CandidateTreeIdentity != expectedTree || request.Verification.AfterRevision != inputRevision {
+		return workercontract.ReportResponse{}, ErrWorkerReportInvalid
+	}
+	var commandsJSON string
+	if err := tx.QueryRowContext(ctx, `SELECT commands_json FROM t_verification_policy_snapshots WHERE snapshot_id = (SELECT policy_snapshot_id FROM t_verification_intents WHERE intent_id = ?)`, intentID).Scan(&commandsJSON); err != nil {
+		return workercontract.ReportResponse{}, fmt.Errorf("read verification commands: %w", ErrWorkerUnavailable)
+	}
+	var expectedCommands []manifest.V2Command
+	if err := json.Unmarshal([]byte(commandsJSON), &expectedCommands); err != nil {
+		return workercontract.ReportResponse{}, fmt.Errorf("decode verification commands: %w", ErrWorkerUnavailable)
+	}
+	expectedCriteria, err := readVerificationCriteria(ctx, tx, string(change.ID), ticketID, final != 0)
+	if err != nil {
+		return workercontract.ReportResponse{}, err
+	}
+	if err := validateVerificationReport(request.Verification, expectedCommands, expectedCriteria); err != nil {
+		return workercontract.ReportResponse{}, err
+	}
+	verdict := deriveVerificationVerdict(request.Verification, expectedCommands, expectedCriteria)
+	now := s.now().UTC()
+	for _, result := range request.Verification.Commands {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO t_verification_command_results (intent_id, ordinal, name, status, exit_code, stdout_sha256, stdout_bytes, stdout_truncated, stderr_sha256, stderr_bytes, stderr_truncated) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, intentID, result.Ordinal, result.Name, result.Status, nullableExitCode(result.ExitCode), result.Stdout.SHA256, result.Stdout.SizeBytes, boolInt(result.Stdout.Truncated), result.Stderr.SHA256, result.Stderr.SizeBytes, boolInt(result.Stderr.Truncated)); err != nil {
+			return workercontract.ReportResponse{}, fmt.Errorf("persist verification command result: %w", ErrVerificationUnavailable)
+		}
+	}
+	for _, result := range request.Verification.Criteria {
+		evidenceIDs, marshalErr := json.Marshal(result.EvidenceIDs)
+		if marshalErr != nil {
+			return workercontract.ReportResponse{}, fmt.Errorf("encode verification evidence ids: %w", ErrVerificationUnavailable)
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO t_verification_criterion_results (intent_id, ticket_id, ordinal, text_sha256, outcome, evidence_ids_json) VALUES (?, ?, ?, ?, ?, ?)`, intentID, result.TicketID, result.Ordinal, result.TextSHA256, result.Outcome, string(evidenceIDs)); err != nil {
+			return workercontract.ReportResponse{}, fmt.Errorf("persist verification criterion result: %w", ErrVerificationUnavailable)
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO t_verification_evidence (evidence_id, intent_id, agent_run_id, outcome, input_revision, candidate_tree_identity, report_digest, review_summary, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, id.New(), intentID, run.ID, verdict, inputRevision, expectedTree, digest, request.Verification.ReviewSummary, stamp(now)); err != nil {
+		return workercontract.ReportResponse{}, fmt.Errorf("persist verification evidence: %w", ErrVerificationUnavailable)
+	}
+	evidenceID := ""
+	if err := tx.QueryRowContext(ctx, `SELECT evidence_id FROM t_verification_evidence WHERE intent_id = ?`, intentID).Scan(&evidenceID); err != nil {
+		return workercontract.ReportResponse{}, fmt.Errorf("read verification evidence: %w", ErrVerificationUnavailable)
+	}
+	if err := insertGovernanceEventTx(ctx, tx, string(change.ProjectID), string(change.ID), "verification_evidence_recorded", evidenceID, map[string]any{"intent_id": intentID, "outcome": verdict}, stamp(s.now().UTC())); err != nil {
+		return workercontract.ReportResponse{}, err
+	}
+	runOutcome := domain.AgentRunOutcomeHumanRequired
+	if verdict == governancedomain.VerificationPass {
+		runOutcome = domain.AgentRunOutcomeSucceeded
+	} else if verdict == governancedomain.VerificationFail {
+		runOutcome = domain.AgentRunOutcomeFailed
+	}
+	if err := run.Complete(runOutcome, now); err != nil {
+		return workercontract.ReportResponse{}, fmt.Errorf("complete verification run: %w", ErrVerificationUnavailable)
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE t_agent_runs SET status = 'completed', outcome = ?, completed_at = ? WHERE agent_run_id = ? AND status = 'running'`, runOutcome, stamp(now), run.ID); err != nil {
+		return workercontract.ReportResponse{}, fmt.Errorf("complete verification agent run: %w", ErrVerificationUnavailable)
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE t_verification_intents SET status = ?, updated_at = ? WHERE intent_id = ? AND status IN ('pending', 'running')`, verdict, stamp(now), intentID); err != nil {
+		return workercontract.ReportResponse{}, fmt.Errorf("complete verification intent: %w", ErrVerificationUnavailable)
+	}
+	if verdict == governancedomain.VerificationPass && final != 0 {
+		next := change
+		next.Stage = domain.LifecycleStageFinalVerify
+		next.Status = domain.ChangeStatusIntegrateReady
+		next.Version++
+		next.UpdatedAt = now
+		if err := updateChangeStage(ctx, tx, change, next, now); err != nil {
+			return workercontract.ReportResponse{}, fmt.Errorf("advance integrate ready change: %w", ErrVerificationUnavailable)
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO t_candidate_revisions (candidate_revision_id, project_id, change_id, revision, tree_identity, verification_evidence_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`, id.New(), change.ProjectID, change.ID, inputRevision, expectedTree, evidenceID, stamp(now)); err != nil {
+			return workercontract.ReportResponse{}, fmt.Errorf("persist candidate revision: %w", ErrVerificationUnavailable)
+		}
+		if err := insertGovernanceEventTx(ctx, tx, string(change.ProjectID), string(change.ID), "final_verification_integrate_ready", evidenceID, map[string]any{"candidate_revision": inputRevision}, stamp(now)); err != nil {
+			return workercontract.ReportResponse{}, err
+		}
+	} else if verdict != governancedomain.VerificationPass && change.Status == domain.ChangeStatusActive {
+		next, transitionErr := change.EnterHumanRequired()
+		if transitionErr != nil {
+			return workercontract.ReportResponse{}, fmt.Errorf("fence verification change: %w", ErrVerificationUnavailable)
+		}
+		next.UpdatedAt = now
+		if err := updateChangeStatus(ctx, tx, change, next, now); err != nil {
+			return workercontract.ReportResponse{}, fmt.Errorf("update verification recovery boundary: %w", ErrVerificationUnavailable)
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE t_worker_leases SET state = 'consumed', consumed_at = ?, report_digest = ?, report_disposition = 'accepted', report_outcome = ? WHERE lease_id = ? AND state = 'active'`, stamp(now), digest, verdict, lease.LeaseID); err != nil {
+		return workercontract.ReportResponse{}, fmt.Errorf("consume verification lease: %w", ErrVerificationUnavailable)
+	}
+	if err := insertWorkerReportReceipt(ctx, tx, digest, request.AgentRunID, lease.LeaseID, lease.WorkerID, "accepted", "", verdict, now); err != nil {
+		return workercontract.ReportResponse{}, fmt.Errorf("record verification report receipt: %w", ErrVerificationUnavailable)
+	}
+	if err := tx.Commit(); err != nil {
+		return workercontract.ReportResponse{}, fmt.Errorf("commit verification report: %w", ErrVerificationUnavailable)
+	}
+	s.forgetLeaseToken(lease.LeaseID)
+	return workercontract.ReportResponse{Disposition: "accepted", AgentRunID: request.AgentRunID, LeaseState: "consumed"}, nil
+}
+
+func validateVerificationReport(report *workercontract.VerificationReport, expected []manifest.V2Command, criteria []workercontract.AcceptanceCriterionRef) error {
+	if report == nil || len(report.Commands) != len(expected) || len(report.Criteria) != len(criteria) || len([]byte(report.ReviewSummary)) > governancedomain.MaxReviewInputBytes || !utf8.ValidString(report.ReviewSummary) {
+		return ErrWorkerReportInvalid
+	}
+	for index, command := range report.Commands {
+		if command.Ordinal != index+1 || command.Name != expected[index].Name || !validVerificationCommandStatus(command) || !validVerificationEvidence(command.Stdout) || !validVerificationEvidence(command.Stderr) {
+			return ErrWorkerReportInvalid
+		}
+	}
+	for index, result := range report.Criteria {
+		expectedCriterion := criteria[index]
+		if result.TicketID != expectedCriterion.TicketID || result.Ordinal != expectedCriterion.Ordinal || result.TextSHA256 != expectedCriterion.TextSHA256 || !validCriterionOutcome(result.Outcome) || !validVerificationEvidenceIDs(result.EvidenceIDs) {
+			return ErrWorkerReportInvalid
+		}
+	}
+	return nil
+}
+
+func validVerificationCommandStatus(command workercontract.VerificationCommandResult) bool {
+	switch command.Status {
+	case governancedomain.CommandPassed:
+		return command.ExitCode != nil && *command.ExitCode == 0
+	case governancedomain.CommandFailed:
+		return command.ExitCode != nil && *command.ExitCode != 0
+	case governancedomain.CommandTimedOut:
+		return command.ExitCode != nil
+	case governancedomain.CommandNotRun:
+		return command.ExitCode == nil && command.Stdout.SizeBytes == 0 && command.Stderr.SizeBytes == 0
+	default:
+		return false
+	}
+}
+
+func validVerificationEvidence(evidence workercontract.VerificationEvidence) bool {
+	if evidence.SizeBytes < 0 || evidence.SizeBytes > governancedomain.MaxVerificationOutput {
+		return false
+	}
+	if evidence.ContentBase64 == "" {
+		return evidence.SizeBytes == 0 && evidence.SHA256 == ""
+	}
+	content, err := base64.StdEncoding.DecodeString(evidence.ContentBase64)
+	if err != nil || int64(len(content)) > evidence.SizeBytes || (!evidence.Truncated && int64(len(content)) != evidence.SizeBytes) {
+		return false
+	}
+	digest := sha256.Sum256(content)
+	return strings.EqualFold(hex.EncodeToString(digest[:]), evidence.SHA256)
+}
+
+func validCriterionOutcome(value string) bool {
+	return value == governancedomain.CriterionPass || value == governancedomain.CriterionFail || value == governancedomain.CriterionHuman || value == governancedomain.CriterionNotRun
+}
+
+func validVerificationEvidenceIDs(values []string) bool {
+	if len(values) > 64 {
+		return false
+	}
+	for _, value := range values {
+		if strings.TrimSpace(value) == "" || !utf8.ValidString(value) || len([]byte(value)) > 256 {
+			return false
+		}
+	}
+	return true
+}
+
+func deriveVerificationVerdict(report *workercontract.VerificationReport, expected []manifest.V2Command, criteria []workercontract.AcceptanceCriterionRef) string {
+	if len(report.GuardFindings) > 0 || report.ReviewSummary == "" || report.CandidateTreeIdentity == "" {
+		return governancedomain.VerificationHuman
+	}
+	hasFailure, hasHuman := false, false
+	for _, command := range report.Commands {
+		switch command.Status {
+		case governancedomain.CommandFailed, governancedomain.CommandTimedOut:
+			hasFailure = true
+		case governancedomain.CommandNotRun:
+			hasHuman = true
+		case governancedomain.CommandPassed:
+		default:
+			hasHuman = true
+		}
+		if command.Stdout.Truncated || command.Stderr.Truncated {
+			hasHuman = true
+		}
+	}
+	for _, criterion := range report.Criteria {
+		if criterion.Outcome == governancedomain.CriterionFail {
+			hasFailure = true
+		} else if criterion.Outcome != governancedomain.CriterionPass || len(criterion.EvidenceIDs) == 0 {
+			hasHuman = true
+		}
+	}
+	if hasFailure {
+		return governancedomain.VerificationFail
+	}
+	if hasHuman || len(report.Commands) != len(expected) || len(report.Criteria) != len(criteria) {
+		return governancedomain.VerificationHuman
+	}
+	return governancedomain.VerificationPass
+}
+
+func nullableExitCode(value *int) any {
+	if value == nil {
+		return nil
+	}
+	return *value
 }
 
 type executionSnapshotRecord struct {
