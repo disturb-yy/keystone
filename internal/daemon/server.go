@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -23,6 +24,7 @@ import (
 	"github.com/disturb-yy/keystone/internal/infrastructure/migration"
 	"github.com/disturb-yy/keystone/internal/infrastructure/repository"
 	"github.com/disturb-yy/keystone/internal/infrastructure/workstore"
+	"github.com/disturb-yy/keystone/internal/planning"
 	"github.com/disturb-yy/keystone/internal/work"
 )
 
@@ -33,6 +35,8 @@ const (
 	stopResponseWindow = 100 * time.Millisecond
 )
 
+var errPlanningSnapshotCleanupDeferred = errors.New("planning snapshot cleanup deferred to next daemon startup")
+
 // Options 配置 Daemon 的启动行为。
 type Options struct {
 	// BootingGate 在 Daemon 已监听但尚未完成数据库启动时调用，供测试控制启动阶段。
@@ -42,7 +46,7 @@ type Options struct {
 	OnBooting func(*Server)
 	// ShutdownTimeout 覆盖优雅关闭 HTTP Server 的等待时长；零值使用默认值。
 	ShutdownTimeout time.Duration
-	// Worker 控制 readiness 后的独立 keystone-worker 监管；默认按 sibling/PATH 自动发现。
+	// Worker 控制启动期的独立 keystone-worker 监管；默认按 sibling/PATH 自动发现。
 	Worker WorkerSupervisorOptions
 }
 
@@ -69,6 +73,8 @@ type Server struct {
 	changes          *work.ChangeService
 	workerStore      *workstore.Store
 	artifacts        *artifact.Store
+	planning         *planning.Coordinator
+	planningManager  planningLifecycle
 	workerSupervisor *WorkerSupervisor
 }
 
@@ -151,12 +157,47 @@ func (s *Server) Run(ctx context.Context) error {
 	if err := s.publishMetadata(); err != nil {
 		return s.startupError(err)
 	}
-	s.setReadiness(true)
 	if err := s.startWorkerSupervisor(ctx); err != nil {
 		return s.startupError(fmt.Errorf("start worker supervisor: %w", err))
 	}
+	if err := s.startPlanningManager(ctx); err != nil {
+		return s.startupError(fmt.Errorf("start planning manager: %w", err))
+	}
+	s.setReadiness(true)
 
 	return s.waitForStop(ctx)
+}
+
+func (s *Server) startPlanningManager(ctx context.Context) error {
+	s.mu.RLock()
+	coordinator := s.planning
+	s.mu.RUnlock()
+	if coordinator == nil {
+		return errors.New("planning coordinator is unavailable")
+	}
+	manager, err := newPlanningManager(coordinator, planningRecoveryInterval)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.planningManager = manager
+	s.mu.Unlock()
+	if err := manager.Start(ctx); err != nil {
+		s.mu.Lock()
+		s.planningManager = nil
+		s.mu.Unlock()
+		return err
+	}
+	return nil
+}
+
+func (s *Server) wakePlanning() {
+	s.mu.RLock()
+	manager := s.planningManager
+	s.mu.RUnlock()
+	if manager != nil {
+		manager.Wake()
+	}
 }
 
 func (s *Server) startWorkerSupervisor(ctx context.Context) error {
@@ -272,14 +313,22 @@ func (s *Server) openAndMigrate(ctx context.Context) error {
 	if _, err := readMigrationVersion(ctx, db); err != nil {
 		return fmt.Errorf("query daemon schema migration version: %w", err)
 	}
+	return s.composeApplications(ctx, db, paths)
+}
+
+func (s *Server) composeApplications(ctx context.Context, db *sql.DB, paths localstate.Paths) error {
 	state, err := workstore.New(db)
 	if err != nil {
 		return fmt.Errorf("create project state adapter: %w", err)
 	}
+	gitAdapter := repository.Git{SnapshotBase: filepath.Join(paths.RuntimeDir, "planning-snapshots")}
+	if err := gitAdapter.ResetSnapshots(); err != nil {
+		return fmt.Errorf("reset planning snapshots after daemon restart: %w", err)
+	}
 	if err := state.ReconcileWorkerRestart(ctx); err != nil {
 		return fmt.Errorf("reconcile worker state after daemon restart: %w", err)
 	}
-	projects, err := work.NewService(repository.Git{}, manifest.Store{}, state)
+	projects, err := work.NewService(gitAdapter, manifest.Store{}, state)
 	if err != nil {
 		return fmt.Errorf("create project application service: %w", err)
 	}
@@ -287,15 +336,25 @@ func (s *Server) openAndMigrate(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("create artifact store: %w", err)
 	}
-	changes, err := work.NewChangeService(state, repository.Git{}, artifactStore, state)
+	changes, err := work.NewChangeService(state, gitAdapter, artifactStore, state)
 	if err != nil {
 		return fmt.Errorf("create change application service: %w", err)
+	}
+	coordinator, err := planning.NewCoordinator(
+		state,
+		artifactStore,
+		planningSnapshotMaterializer{git: gitAdapter},
+		planningDispatcher{authority: state},
+	)
+	if err != nil {
+		return fmt.Errorf("create planning coordinator: %w", err)
 	}
 	s.mu.Lock()
 	s.projects = projects
 	s.changes = changes
 	s.workerStore = state
 	s.artifacts = artifactStore
+	s.planning = coordinator
 	s.mu.Unlock()
 	return nil
 }
@@ -349,14 +408,23 @@ func (s *Server) waitForStop(ctx context.Context) error {
 	}
 }
 
-func (s *Server) shutdownResources() error {
+type daemonResources struct {
+	server              *http.Server
+	db                  *sql.DB
+	paths               localstate.Paths
+	instanceID          string
+	lock                *localstate.InstanceLock
+	planningManager     planningLifecycle
+	planningCoordinator *planning.Coordinator
+	workerSupervisor    *WorkerSupervisor
+}
+
+func (s *Server) detachResources() daemonResources {
 	s.mu.Lock()
-	server := s.httpServer
-	db := s.db
-	paths := s.paths
-	instanceID := s.instanceID
-	lock := s.lock
-	workerSupervisor := s.workerSupervisor
+	resources := daemonResources{
+		server: s.httpServer, db: s.db, paths: s.paths, instanceID: s.instanceID, lock: s.lock,
+		planningManager: s.planningManager, planningCoordinator: s.planning, workerSupervisor: s.workerSupervisor,
+	}
 	s.httpServer = nil
 	s.listener = nil
 	s.db = nil
@@ -364,37 +432,92 @@ func (s *Server) shutdownResources() error {
 	s.changes = nil
 	s.workerStore = nil
 	s.artifacts = nil
+	s.planning = nil
+	s.planningManager = nil
 	s.workerSupervisor = nil
 	s.lock = nil
 	s.readiness = false
 	s.mu.Unlock()
+	return resources
+}
 
-	var shutdownErr error
-	if workerSupervisor != nil {
-		workerContext, cancel := context.WithTimeout(context.Background(), s.options.ShutdownTimeout)
-		shutdownErr = workerSupervisor.Stop(workerContext)
-		cancel()
-	}
-	if server != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), s.options.ShutdownTimeout)
-		shutdownErr = errors.Join(shutdownErr, server.Shutdown(ctx))
-		cancel()
-	}
-	closeErr := closeDatabase(db)
-	metadataErr := error(nil)
-	if instanceID != "" {
-		metadataErr = localstate.ClearMetadata(paths, instanceID)
-	}
-	lockErr := error(nil)
-	if lock != nil {
-		lockErr = lock.Release()
-	}
+func (s *Server) shutdownResources() error {
+	resources := s.detachResources()
+	planningManagerErr := s.stopPlanningManager(resources.planningManager)
+	workerErr := s.stopWorkerSupervisor(resources.workerSupervisor)
+	snapshotErr := closePlanningCoordinatorAfterStops(errors.Join(planningManagerErr, workerErr), resources.planningCoordinator)
+	serverErr := s.shutdownHTTP(resources.server)
+	closeErr := closeDatabase(resources.db)
+	metadataErr := clearDaemonMetadata(resources.paths, resources.instanceID)
+	lockErr := releaseDaemonLock(resources.lock)
 	return errors.Join(
-		wrapShutdownError("shutdown daemon HTTP server", shutdownErr),
+		wrapShutdownError("stop planning manager", planningManagerErr),
+		wrapShutdownError("stop worker supervisor", workerErr),
+		wrapShutdownError("close planning snapshots", snapshotErr),
+		wrapShutdownError("shutdown daemon HTTP server", serverErr),
 		wrapShutdownError("close daemon database", closeErr),
 		wrapShutdownError("clear daemon metadata", metadataErr),
 		wrapShutdownError("release daemon instance lock", lockErr),
 	)
+}
+
+func (s *Server) stopPlanningManager(manager planningLifecycle) error {
+	if manager == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), s.options.ShutdownTimeout)
+	defer cancel()
+	return manager.Stop(ctx)
+}
+
+func (s *Server) stopWorkerSupervisor(supervisor *WorkerSupervisor) error {
+	if supervisor == nil {
+		return nil
+	}
+	timeout := s.options.ShutdownTimeout
+	if supervisor.options.ShutdownTimeout > timeout {
+		timeout = supervisor.options.ShutdownTimeout + 500*time.Millisecond
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	return supervisor.Stop(ctx)
+}
+
+type planningCloser interface {
+	Close() error
+}
+
+func closePlanningCoordinatorAfterStops(stopErr error, coordinator planningCloser) error {
+	if coordinator == nil {
+		return nil
+	}
+	if stopErr != nil {
+		return errPlanningSnapshotCleanupDeferred
+	}
+	return coordinator.Close()
+}
+
+func (s *Server) shutdownHTTP(server *http.Server) error {
+	if server == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), s.options.ShutdownTimeout)
+	defer cancel()
+	return server.Shutdown(ctx)
+}
+
+func clearDaemonMetadata(paths localstate.Paths, instanceID string) error {
+	if instanceID == "" {
+		return nil
+	}
+	return localstate.ClearMetadata(paths, instanceID)
+}
+
+func releaseDaemonLock(lock *localstate.InstanceLock) error {
+	if lock == nil {
+		return nil
+	}
+	return lock.Release()
 }
 
 func closeDatabase(db *sql.DB) error {
@@ -439,9 +562,9 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) databaseReady(ctx context.Context) bool {
 	s.mu.RLock()
-	ready, db := s.readiness, s.db
+	ready, db, planningManager, workerSupervisor := s.readiness, s.db, s.planningManager, s.workerSupervisor
 	s.mu.RUnlock()
-	if !ready || db == nil {
+	if !ready || db == nil || (planningManager != nil && planningManager.Err() != nil) || (workerSupervisor != nil && workerSupervisor.Err() != nil) {
 		return false
 	}
 	probeCtx, cancel := context.WithTimeout(ctx, databaseProbeTimeout)
@@ -477,9 +600,9 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) statusResponse(ctx context.Context) (controlplane.DaemonStatusResponse, error) {
 	s.mu.RLock()
-	ready, db, paths, instanceID := s.readiness, s.db, s.paths, s.instanceID
+	ready, db, paths, instanceID, planningManager, workerSupervisor := s.readiness, s.db, s.paths, s.instanceID, s.planningManager, s.workerSupervisor
 	s.mu.RUnlock()
-	if !ready || db == nil {
+	if !ready || db == nil || (planningManager != nil && planningManager.Err() != nil) || (workerSupervisor != nil && workerSupervisor.Err() != nil) {
 		return controlplane.DaemonStatusResponse{}, errors.New("daemon status is not ready")
 	}
 	probeCtx, cancel := context.WithTimeout(ctx, databaseProbeTimeout)

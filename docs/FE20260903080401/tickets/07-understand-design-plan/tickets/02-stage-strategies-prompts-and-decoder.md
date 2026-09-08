@@ -4,7 +4,7 @@
 
 **Blocked by：** 07-01、顶层 Ticket 06。RuntimeAdapter 的具体实现由 Ticket 06 提供；Ticket 07 只能依赖稳定的窄接口，不能把 Codex 命令行细节带进 Planning。
 
-**Status：** ready-for-agent（仅文档成熟度）
+**Status：** implemented（真实 Runtime smoke 仍属于 Ticket 06 证据）
 
 ## Stage contract
 

@@ -49,6 +49,7 @@ func (s *Server) handleChangeCreate(w http.ResponseWriter, r *http.Request) {
 		writeChangeError(w, err)
 		return
 	}
+	s.wakePlanning()
 	writeJSON(w, http.StatusCreated, controlplane.ChangeCreateResponse{Change: changeDTO(change)})
 }
 
@@ -194,6 +195,9 @@ func (s *Server) handleChangeCommand(w http.ResponseWriter, r *http.Request, ser
 		writeChangeError(w, err)
 		return
 	}
+	if request.Command == "resume" {
+		s.wakePlanning()
+	}
 	writeJSON(w, http.StatusOK, controlplane.ChangeCommandResponse{Change: changeDTO(change)})
 }
 
@@ -212,6 +216,9 @@ func (s *Server) handleChangeDecision(w http.ResponseWriter, r *http.Request, se
 	if err != nil {
 		writeChangeError(w, err)
 		return
+	}
+	if request.Decision == domain.HumanDecisionRetry {
+		s.wakePlanning()
 	}
 	writeJSON(w, http.StatusOK, controlplane.HumanDecisionResponse{Change: changeDTO(change)})
 }
@@ -303,7 +310,22 @@ func changeDTO(change domain.Change) controlplane.ChangeDTO {
 }
 
 func artifactRefDTO(ref domain.ArtifactRef) controlplane.ArtifactRefDTO {
-	return controlplane.ArtifactRefDTO{ArtifactRefID: string(ref.ID), ArtifactID: string(ref.ArtifactID), Role: ref.Role, Ordinal: ref.Ordinal}
+	return controlplane.ArtifactRefDTO{
+		ArtifactRefID: string(ref.ID), ArtifactID: string(ref.ArtifactID), Role: ref.Role, Ordinal: ref.Ordinal,
+		Kind: ref.Kind, SchemaVersion: ref.SchemaVersion, Summary: ref.Summary, SourceRevision: ref.SourceRevision,
+		InputArtifactRefIDs: artifactRefIDDTOs(ref.InputArtifactRefIDs), RawLogArtifactRefIDs: artifactRefIDDTOs(ref.RawLogArtifactRefIDs),
+	}
+}
+
+func artifactRefIDDTOs(refs []domain.ArtifactRefID) []string {
+	if len(refs) == 0 {
+		return nil
+	}
+	result := make([]string, 0, len(refs))
+	for _, ref := range refs {
+		result = append(result, string(ref))
+	}
+	return result
 }
 
 func agentRunPointerDTO(run *domain.AgentRun) *controlplane.AgentRunDTO {
@@ -324,7 +346,7 @@ func agentRunDTO(run domain.AgentRun) controlplane.AgentRunDTO {
 	for _, artifact := range run.Artifacts {
 		artifacts = append(artifacts, controlplane.AgentRunArtifactDTO{ArtifactRefID: string(artifact.ArtifactRefID), Role: artifact.Role, Ordinal: artifact.Ordinal})
 	}
-	return controlplane.AgentRunDTO{AgentRunID: string(run.ID), ChangeID: string(run.ChangeID), Stage: string(run.Stage), Attempt: run.Attempt, Status: run.Status, Outcome: run.Outcome, Artifacts: artifacts, StartedAt: run.StartedAt.UTC().Format(timeRFC3339Nano), CompletedAt: completedAt}
+	return controlplane.AgentRunDTO{AgentRunID: string(run.ID), ChangeID: string(run.ChangeID), Stage: string(run.Stage), Attempt: run.Attempt, RunKind: run.RunKind, SourceRevision: run.SourceRevision, Status: run.Status, Outcome: run.Outcome, Artifacts: artifacts, StartedAt: run.StartedAt.UTC().Format(timeRFC3339Nano), CompletedAt: completedAt}
 }
 
 func humanDecisionDTO(decision domain.HumanDecision) controlplane.HumanDecisionDTO {

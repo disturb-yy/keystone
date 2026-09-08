@@ -15,6 +15,9 @@ const (
 	ProtocolVersionV1 = "v1"
 	// MaxBodyBytes 限制单个 Worker Protocol JSON body 的大小。
 	MaxBodyBytes = 64 << 20
+
+	// ResultModePlanningCandidate 要求 Runtime 单独返回可由 Daemon 校验的候选结果。
+	ResultModePlanningCandidate = "planning_candidate"
 )
 
 // Outcome 表示 Worker 对一次 AgentRun 执行结果的传输值。
@@ -88,6 +91,9 @@ type Assignment struct {
 	// Runtime 指定 Worker 应使用的 Runtime 标识。
 	Runtime string `json:"runtime"`
 
+	// ResultMode 只描述结果采集方式，不授予 Worker 生命周期权威。
+	ResultMode string `json:"result_mode,omitempty"`
+
 	// LeaseExpiresAt 是本次 Lease 的 UTC RFC3339 时间。
 	LeaseExpiresAt string `json:"lease_expires_at,omitempty"`
 
@@ -145,7 +151,7 @@ type Report struct {
 	// GuardFindings 是独立 Guard 观察到的越界事实。
 	GuardFindings []string `json:"guard_findings,omitempty"`
 
-	// Artifacts 是 stdout、stderr、diff、changed_files 的有界 payload。
+	// Artifacts 是执行证据与可选 Planning candidate 的有界 payload。
 	Artifacts []Artifact `json:"artifacts,omitempty"`
 
 	// CaptureFailures 记录独立采集失败，不使用 Runtime 自报替代。
@@ -241,6 +247,9 @@ func walkJSON(decoder *json.Decoder) error {
 				key, ok := keyToken.(string)
 				if !ok {
 					return errors.New("object key is not a string")
+				}
+				if key != strings.ToLower(key) {
+					return fmt.Errorf("JSON key %q is not canonical lowercase", key)
 				}
 				if _, exists := seen[key]; exists {
 					return fmt.Errorf("duplicate JSON key %q", key)

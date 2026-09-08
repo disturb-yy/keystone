@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	_ "modernc.org/sqlite"
 
@@ -20,10 +21,13 @@ import (
 	"github.com/disturb-yy/keystone/internal/infrastructure/repository"
 	"github.com/disturb-yy/keystone/internal/infrastructure/workstore"
 	"github.com/disturb-yy/keystone/internal/work"
+	"github.com/disturb-yy/keystone/internal/work/domain"
 )
 
 func TestChangeHTTPCreateControlTraceAndArtifact(t *testing.T) {
 	server, root := newChangeHTTPTestServer(t)
+	planningWake := &recordingPlanningLifecycle{}
+	server.planningManager = planningWake
 	handler := server.routes()
 	initRequest := httptest.NewRequest(http.MethodPost, "/v1/projects/init", bytes.NewBufferString(`{"repository_path":"`+root+`"}`))
 	initRequest.Header.Set(controlplane.IdempotencyKeyHeader, "project-key")
@@ -48,6 +52,9 @@ func TestChangeHTTPCreateControlTraceAndArtifact(t *testing.T) {
 	decodeJSON(t, createResponse, &created)
 	if created.Change.Status != "active" || created.Change.Stage != "Intent" || created.Change.Version != 1 || created.Change.IntentArtifact.ArtifactRefID == "" {
 		t.Fatalf("created change = %+v", created.Change)
+	}
+	if planningWake.wakeCount() != 1 {
+		t.Fatalf("planning wake count after create = %d, want 1", planningWake.wakeCount())
 	}
 
 	replayRequest := httptest.NewRequest(http.MethodPost, "/v1/changes", bytes.NewBufferString(body))
@@ -74,6 +81,9 @@ func TestChangeHTTPCreateControlTraceAndArtifact(t *testing.T) {
 	if dirtyReplay.Change.ChangeID != created.Change.ChangeID {
 		t.Fatalf("dirty replay change id = %q, want %q", dirtyReplay.Change.ChangeID, created.Change.ChangeID)
 	}
+	if planningWake.wakeCount() != 3 {
+		t.Fatalf("planning wake count after create replays = %d, want 3", planningWake.wakeCount())
+	}
 	listRequest := httptest.NewRequest(http.MethodGet, "/v1/changes?repository_path="+url.QueryEscape(root), nil)
 	listResponse := httptest.NewRecorder()
 	handler.ServeHTTP(listResponse, listRequest)
@@ -99,6 +109,9 @@ func TestChangeHTTPCreateControlTraceAndArtifact(t *testing.T) {
 	if paused.Change.Status != "paused" || paused.Change.Version != 2 {
 		t.Fatalf("paused change = %+v", paused.Change)
 	}
+	if planningWake.wakeCount() != 3 {
+		t.Fatalf("pause unexpectedly woke planning: %d", planningWake.wakeCount())
+	}
 	staleRequest := httptest.NewRequest(http.MethodPost, "/v1/changes/"+created.Change.ChangeID+"/commands", bytes.NewBufferString(`{"command":"resume","expected_version":1}`))
 	staleRequest.Header.Set(controlplane.IdempotencyKeyHeader, "stale-key")
 	staleResponse := httptest.NewRecorder()
@@ -119,6 +132,9 @@ func TestChangeHTTPCreateControlTraceAndArtifact(t *testing.T) {
 	decodeJSON(t, resumeResponse, &resumed)
 	if resumed.Change.Status != "active" || resumed.Change.Version != 3 {
 		t.Fatalf("resumed change = %+v", resumed.Change)
+	}
+	if planningWake.wakeCount() != 4 {
+		t.Fatalf("planning wake count after resume = %d, want 4", planningWake.wakeCount())
 	}
 	replayPauseRequest := httptest.NewRequest(http.MethodPost, "/v1/changes/"+created.Change.ChangeID+"/commands", bytes.NewBufferString(`{"command":"pause","expected_version":1}`))
 	replayPauseRequest.Header.Set(controlplane.IdempotencyKeyHeader, "pause-key")
@@ -204,6 +220,30 @@ func newChangeHTTPTestServer(t *testing.T) (*Server, string) {
 		t.Fatal(err)
 	}
 	return &Server{projects: projects, changes: changes}, root
+}
+
+func TestPlanningTraceMetadataDTOs(t *testing.T) {
+	ref := domain.ArtifactRef{
+		ID: domain.ArtifactRefID("ref-output"), ArtifactID: domain.ArtifactID("artifact-output"),
+		Role: domain.ArtifactRoleOutput, Ordinal: 2, Kind: "understanding", SchemaVersion: "Understanding.v1",
+		Summary: "需求理解", SourceRevision: "revision-1",
+		InputArtifactRefIDs: []domain.ArtifactRefID{"ref-intent", "ref-context"}, RawLogArtifactRefIDs: []domain.ArtifactRefID{"ref-stdout"},
+	}
+	dto := artifactRefDTO(ref)
+	if dto.Kind != ref.Kind || dto.SchemaVersion != ref.SchemaVersion || dto.Summary != ref.Summary || dto.SourceRevision != ref.SourceRevision {
+		t.Fatalf("planning artifact metadata = %+v", dto)
+	}
+	if len(dto.InputArtifactRefIDs) != 2 || dto.InputArtifactRefIDs[0] != "ref-intent" || dto.InputArtifactRefIDs[1] != "ref-context" || len(dto.RawLogArtifactRefIDs) != 1 || dto.RawLogArtifactRefIDs[0] != "ref-stdout" {
+		t.Fatalf("planning artifact links = %+v", dto)
+	}
+
+	runDTO := agentRunDTO(domain.AgentRun{
+		ID: domain.AgentRunID("run-1"), ChangeID: domain.ChangeID("change-1"), Stage: domain.LifecycleStageUnderstand,
+		Attempt: 1, RunKind: domain.AgentRunKindPlanning, SourceRevision: "revision-1", Status: domain.AgentRunStatusRunning, StartedAt: time.Unix(1, 0).UTC(),
+	})
+	if runDTO.RunKind != domain.AgentRunKindPlanning || runDTO.SourceRevision != "revision-1" {
+		t.Fatalf("planning run metadata = %+v", runDTO)
+	}
 }
 
 func commitGit(t *testing.T, root, message string) {

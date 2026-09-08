@@ -57,3 +57,31 @@ func TestGuardCheckRevisionFindsHeadChange(t *testing.T) {
 		t.Fatalf("CheckRevision() = %#v, want nil", got)
 	}
 }
+
+func TestGuardPinsRuntimeTemporaryEnvironmentToControlledDirectory(t *testing.T) {
+	base := t.TempDir()
+	guard := NewGuard()
+	environment, cleanup, err := guard.PrepareEnvironmentAt(context.Background(), []string{
+		"PATH=" + os.Getenv("PATH"),
+		"TMPDIR=/source/repository/tmp",
+		"TEMP=/source/repository/temp",
+		"TMP=/source/repository/tmp-windows",
+	}, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtimeTemp := lookupEnv(environment, "TMPDIR")
+	if runtimeTemp == "" || filepath.Dir(runtimeTemp) != base {
+		t.Fatalf("TMPDIR = %q, want a child of %q", runtimeTemp, base)
+	}
+	if got := lookupEnv(environment, "TEMP"); got != runtimeTemp {
+		t.Fatalf("TEMP = %q, want %q", got, runtimeTemp)
+	}
+	if got := lookupEnv(environment, "TMP"); got != runtimeTemp {
+		t.Fatalf("TMP = %q, want %q", got, runtimeTemp)
+	}
+	cleanup()
+	if _, err := os.Stat(runtimeTemp); !os.IsNotExist(err) {
+		t.Fatalf("runtime temporary directory survived cleanup: %v", err)
+	}
+}

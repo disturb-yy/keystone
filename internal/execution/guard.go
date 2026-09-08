@@ -106,8 +106,22 @@ func (g *Guard) CheckRevision(before, after string) []string {
 
 // PrepareEnvironment 构造经过过滤且带 Git 拒绝 wrapper 的 Runtime 环境。
 func (g *Guard) PrepareEnvironment(ctx context.Context, base []string) ([]string, func(), error) {
+	return g.PrepareEnvironmentAt(ctx, base, "")
+}
+
+// PrepareEnvironmentAt 在已验证的临时父目录内创建 Git 拒绝 wrapper；空父目录保持旧调用兼容。
+func (g *Guard) PrepareEnvironmentAt(ctx context.Context, base []string, tempBase string) ([]string, func(), error) {
 	if ctx == nil {
 		return nil, func() {}, errors.New("prepare runtime environment: nil context")
+	}
+	if tempBase != "" {
+		if !filepath.IsAbs(tempBase) || filepath.Clean(tempBase) != tempBase {
+			return nil, func() {}, errors.New("prepare runtime environment: invalid temporary base")
+		}
+		info, err := os.Lstat(tempBase)
+		if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			return nil, func() {}, errors.New("prepare runtime environment: invalid temporary base")
+		}
 	}
 	filtered := SanitizeEnvironment(base)
 	realGit := g.GitBinary
@@ -118,7 +132,7 @@ func (g *Guard) PrepareEnvironment(ctx context.Context, base []string) ([]string
 			return nil, func() {}, fmt.Errorf("prepare runtime environment: locate git: %w", err)
 		}
 	}
-	directory, err := os.MkdirTemp("", "keystone-git-guard-")
+	directory, err := os.MkdirTemp(tempBase, "keystone-git-guard-")
 	if err != nil {
 		return nil, func() {}, fmt.Errorf("prepare runtime environment: create wrapper directory: %w", err)
 	}
@@ -132,6 +146,13 @@ func (g *Guard) PrepareEnvironment(ctx context.Context, base []string) ([]string
 		pathValue = os.Getenv("PATH")
 	}
 	filtered = setEnv(filtered, "PATH", filepath.Dir(path)+string(os.PathListSeparator)+pathValue)
+	if tempBase != "" {
+		// Runtime 自身及其子进程的临时文件也必须落在受控目录；只移动 Git wrapper
+		// 仍会允许继承的 TMPDIR/TEMP/TMP 指回原始 Repository。
+		filtered = setEnv(filtered, "TMPDIR", directory)
+		filtered = setEnv(filtered, "TEMP", directory)
+		filtered = setEnv(filtered, "TMP", directory)
+	}
 	cleanup := func() { _ = os.RemoveAll(directory) }
 	return filtered, cleanup, nil
 }

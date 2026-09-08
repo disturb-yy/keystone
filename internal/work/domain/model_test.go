@@ -102,6 +102,45 @@ func TestAgentRunCompletionIsOneTime(t *testing.T) {
 	}
 }
 
+func TestPlanningArtifactRefMetadataIsAdditiveAndValidated(t *testing.T) {
+	changeID := ChangeID(NewProjectID())
+	legacy := ArtifactRef{ID: ArtifactRefID(NewProjectID()), ChangeID: changeID, ArtifactID: ArtifactID(NewProjectID()), Role: ArtifactRoleOutput}
+	if err := legacy.Validate(); err != nil || !legacy.IsLegacy() {
+		t.Fatalf("legacy ref validation = %v, IsLegacy = %t", err, legacy.IsLegacy())
+	}
+	inputID := ArtifactRefID(NewProjectID())
+	rawLogID := ArtifactRefID(NewProjectID())
+	planning := legacy
+	planning.Kind = "understanding"
+	planning.SchemaVersion = "Understanding.v1"
+	planning.Summary = "已确认的理解"
+	planning.SourceRevision = strings.Repeat("a", 40)
+	planning.InputArtifactRefIDs = []ArtifactRefID{inputID}
+	planning.RawLogArtifactRefIDs = []ArtifactRefID{rawLogID}
+	if err := planning.Validate(); err != nil || planning.IsLegacy() {
+		t.Fatalf("planning ref validation = %v, IsLegacy = %t", err, planning.IsLegacy())
+	}
+	planning.InputArtifactRefIDs = []ArtifactRefID{inputID, inputID}
+	if !errors.Is(planning.Validate(), ErrInvalidRequest) {
+		t.Fatal("planning ref accepted duplicate input links")
+	}
+}
+
+func TestPlanningAgentRunRequiresStageAndSourceRevision(t *testing.T) {
+	run := AgentRun{
+		ID: AgentRunID(NewProjectID()), ChangeID: ChangeID(NewProjectID()),
+		Stage: LifecycleStageUnderstand, Attempt: 1, RunKind: AgentRunKindPlanning,
+		SourceRevision: strings.Repeat("b", 40), Status: AgentRunStatusRunning, StartedAt: time.Now().UTC(),
+	}
+	if err := run.Validate(); err != nil || !run.IsPlanning() {
+		t.Fatalf("planning run validation = %v, IsPlanning = %t", err, run.IsPlanning())
+	}
+	run.Stage = LifecycleStageIntent
+	if !errors.Is(run.Validate(), ErrInvalidRequest) {
+		t.Fatal("planning run accepted Intent as execution stage")
+	}
+}
+
 func validChange(t *testing.T) Change {
 	t.Helper()
 	changeID := ChangeID(NewProjectID())

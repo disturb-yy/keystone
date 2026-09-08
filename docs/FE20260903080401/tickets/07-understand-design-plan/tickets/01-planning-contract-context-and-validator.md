@@ -4,7 +4,7 @@
 
 **Blocked by：** 顶层 Ticket 06；实现还必须以当前 `internal/work/domain` 的 ArtifactRef、Change、AgentRun 事实为输入，不提前改变 Ticket 08 的 Ticket Graph 契约。
 
-**Status：** ready-for-agent（仅文档成熟度；前置实现和验收证据仍需在当前 checkout 中核验）
+**Status：** implemented（Ticket 06 外部验收缺口仍由顶层阻塞关系跟踪）
 
 ## Scope
 

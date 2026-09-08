@@ -41,6 +41,8 @@ func TestWorkerProtocolHandlerValidatesLoopbackAuthAndStrictJSON(t *testing.T) {
 		t.Fatal(err)
 	}
 	handler := NewWorkerProtocolHandler(store, nil)
+	wakeCount := 0
+	handler.Wake = func() { wakeCount++ }
 
 	register := func(body, remote, bearer string) *httptest.ResponseRecorder {
 		recorder := httptest.NewRecorder()
@@ -69,6 +71,9 @@ func TestWorkerProtocolHandlerValidatesLoopbackAuthAndStrictJSON(t *testing.T) {
 	if valid.Code != http.StatusOK || bytes.Contains(valid.Body.Bytes(), []byte(secret)) {
 		t.Fatalf("register response = %d %s, secret was returned or request failed", valid.Code, valid.Body.String())
 	}
+	if wakeCount != 1 {
+		t.Fatalf("planning wake count after register = %d, want 1", wakeCount)
+	}
 
 	pullRecorder := httptest.NewRecorder()
 	pullRequest := httptest.NewRequest(http.MethodPost, "http://127.0.0.1/worker/v1/pull", bytes.NewBufferString(`{"worker_id":"worker-http"}`))
@@ -77,6 +82,9 @@ func TestWorkerProtocolHandlerValidatesLoopbackAuthAndStrictJSON(t *testing.T) {
 	handler.ServeHTTP(pullRecorder, pullRequest)
 	if pullRecorder.Code != http.StatusOK || pullRecorder.Body.String() != "{\"assignment\":null}\n" {
 		t.Fatalf("empty pull response = %d %q", pullRecorder.Code, pullRecorder.Body.String())
+	}
+	if wakeCount != 1 {
+		t.Fatalf("pull unexpectedly woke planning: %d", wakeCount)
 	}
 
 	var response workercontract.RegisterResponse

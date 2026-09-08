@@ -1,6 +1,6 @@
 # 07：Understand、Design、Plan 实施规格
 
-> **状态：** Planning 规格已对齐，尚未实现。顶层 Ticket 07 的 `BLOCKED_BY: 06` 仍然有效；本文件和子 Ticket 的 `ready-for-agent` 只表示契约成熟度，不表示当前 checkout 已具备 Ticket 07 的 Planning Strategy、Coordinator 或 Planning Artifact 业务行为。
+> **状态：** Planning 代码已按本规格实现并进入验证。顶层 Ticket 07 的 `BLOCKED_BY: 06` 仍然有效；Ticket 06 的真实 Codex 与原生 Windows 证据仍是独立验收缺口。
 >
 > **用途：** 作为 Ticket 07 五个实施子票的共同契约，约束 Planning 的输入、阶段策略、Artifact 验证、Daemon 权威提交和恢复边界。
 
@@ -15,11 +15,11 @@ Ticket 05 已为 Change、Lifecycle、Artifact、Event、AgentRun 和人工恢�
 以下是当前 checkout 的事实，不是本 Ticket 的已实现行为：
 
 - 顶层 `docs/FE20260903080401/tickets/07-understand-design-plan.md` 已存在；本目录下的规格和五个子 Ticket 是本次补齐的实施文档。
-- `internal/planning/` 当前只有本 Ticket 新增的局部规约和索引，没有 Go 源码、Runtime 调用或持久化行为。
+- `internal/planning/` 已有本 Ticket 的 Contract、validator、Strategy、prompt/decoder 和 Coordinator 源码及纯单元测试。
 - `internal/work/` 与 `internal/work/domain/` 已承载 Change 生命周期、AgentRun 和 Artifact/Event 的 Work 领域模型；AgentRun/Change 的权威写入由 State port 和 `internal/infrastructure/workstore/` 负责。
-- `internal/infrastructure/repository/` 当前是只读 Git root/topology/snapshot 适配器；它尚未提供 Ticket 07 的临时隔离 Snapshot materialization。
-- `internal/infrastructure/workstore/` 当前持有业务 SQLite Migration 和 Work 状态；Ticket 07 的 Migration 必须继续由它拥有。
-- `internal/execution/`、`internal/worker/`、`cmd/keystone-worker/` 以及 Daemon/Workstore 的 Worker Protocol seam 已存在，提供 Ticket 07 可依赖的 Runtime/Worker 边界；Planning Strategy、Coordinator 和 Planning Artifact 业务行为仍未实现。Ticket 06 的完整验收和平台证据仍必须在当前 checkout 中核验，不能由本规格替代。
+- `internal/infrastructure/repository/` 已提供固定 commit object 的隔离临时 Snapshot materialization，且不修改源 Repository。
+- `internal/infrastructure/workstore/` 持有 schema v5 additive Migration、Planning candidate 与原子 stage completion；旧空 metadata 记录保持可读。
+- `internal/execution/`、`internal/worker/`、`cmd/keystone-worker/` 以及 Daemon/Workstore 的 Worker Protocol seam 已存在，并增加非权威 `planning_candidate` 结果模式。Ticket 06 的完整验收和平台证据仍必须单独核验，不能由本规格替代。
 
 ## 3. Goal
 
@@ -110,12 +110,12 @@ Planning 不拥有 Change、AgentRun、Event、Decision 或 SQLite 的权威写�
 
 | 路径 | Ticket 07 责任 | 当前状态 |
 | --- | --- | --- |
-| `internal/planning/` | Context、Contract、schema validator、Stage Strategy、prompt/decoder、Coordinator port | 本次只创建局部文档；Go 实现待 Ticket 06 后开始 |
-| `internal/work/` | Change/AgentRun/Lifecycle authority 和窄 Application/State port | 已存在；只按实现所需扩展 |
-| `internal/infrastructure/workstore/` | Planning Artifact 元数据/AgentRun 事务和 Migration | 已存在；继续作为 SQLite owner |
-| `internal/infrastructure/repository/` | 固定 revision 的只读/隔离 Snapshot adapter | 已存在；具体扩展须先对齐局部职责 |
-| `internal/daemon/` | Coordinator composition、启动恢复和生命周期接线 | 已存在；不在 Planning package 中写 HTTP Handler |
-| `internal/execution/`、`internal/worker/`、`cmd/keystone-worker/` | Ticket 06 已有的 Runtime/Worker 运行边界 | Ticket 07 只消费稳定 port，不重复实现或扩展为新的执行领域 |
+| `internal/planning/` | Context、Contract、schema validator、Stage Strategy、prompt/decoder、Coordinator port | 已实现；只依赖窄 Work/Artifact/Snapshot/Dispatcher port |
+| `internal/work/` | Change/AgentRun/Lifecycle authority 和窄 Application/State port | 已按实现所需扩展 Planning authority port |
+| `internal/infrastructure/workstore/` | Planning Artifact 元数据/AgentRun 事务和 Migration | 已实现 schema v5 additive Migration 与原子提交 |
+| `internal/infrastructure/repository/` | 固定 revision 的只读/隔离 Snapshot adapter | 已实现临时隔离 materialization 与清理 |
+| `internal/daemon/` | Coordinator composition、启动恢复和生命周期接线 | 已接线；没有公开 planning start Handler |
+| `internal/execution/`、`internal/worker/`、`cmd/keystone-worker/` | Ticket 06 已有的 Runtime/Worker 运行边界 | 仅增加非权威 candidate 采集与只读 Snapshot 保护 |
 
 ## 8. Implementation Order and Sub-Ticket Graph
 

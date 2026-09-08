@@ -13,14 +13,17 @@ import (
 const (
 	// RuntimeCodex 是 V1 支持的 Runtime capability。
 	RuntimeCodex = "codex"
+	// ResultModePlanningCandidate 要求 Runtime 单独采集可验证候选结果。
+	ResultModePlanningCandidate = "planning_candidate"
 
 	ArtifactStdout       ArtifactKind = "stdout"
 	ArtifactStderr       ArtifactKind = "stderr"
 	ArtifactDiff         ArtifactKind = "diff"
 	ArtifactChangedFiles ArtifactKind = "changed_files"
+	ArtifactCandidate    ArtifactKind = "candidate"
 )
 
-// ArtifactKind 是四类可传输执行证据的固定名称。
+// ArtifactKind 是可传输执行证据与 Planning candidate 的固定名称。
 type ArtifactKind string
 
 // RuntimeAdapter 将受限执行输入转换为 Runtime 的观察事实。
@@ -38,6 +41,7 @@ type ExecutionInput struct {
 	Timeout        time.Duration
 	Environment    []string
 	Limits         Limits
+	ResultMode     string
 }
 
 // Validate 检查不会改变业务状态的本地执行前置条件。
@@ -47,6 +51,9 @@ func (in ExecutionInput) Validate() error {
 	}
 	if in.Runtime == "" {
 		in.Runtime = RuntimeCodex
+	}
+	if in.ResultMode != "" && in.ResultMode != ResultModePlanningCandidate {
+		return fmt.Errorf("validate execution input: unsupported result mode %q", in.ResultMode)
 	}
 	if in.Timeout < 0 {
 		return fmt.Errorf("validate execution input: timeout must not be negative")
@@ -66,6 +73,7 @@ type RuntimeResult struct {
 	Stderr          Artifact
 	Diff            Artifact
 	ChangedFiles    Artifact
+	Candidate       Artifact
 	ChangedFileList []string
 	GuardFindings   []string
 	CaptureFailures []CaptureFailure
@@ -100,7 +108,7 @@ func NewArtifact(kind ArtifactKind, content []byte, truncated bool, captureErr e
 
 // Validate 检查 Artifact 的摘要、长度和 kind 表达。
 func (a Artifact) Validate() error {
-	if a.Kind != ArtifactStdout && a.Kind != ArtifactStderr && a.Kind != ArtifactDiff && a.Kind != ArtifactChangedFiles {
+	if a.Kind != ArtifactStdout && a.Kind != ArtifactStderr && a.Kind != ArtifactDiff && a.Kind != ArtifactChangedFiles && a.Kind != ArtifactCandidate {
 		return fmt.Errorf("validate artifact: unsupported kind %q", a.Kind)
 	}
 	if a.SizeBytes != int64(len(a.Content)) || len(a.SHA256) != sha256.Size*2 {
@@ -126,6 +134,7 @@ type Limits struct {
 	StderrBytes       int64
 	DiffBytes         int64
 	ChangedFilesBytes int64
+	CandidateBytes    int64
 	TotalBytes        int64
 }
 
@@ -136,6 +145,9 @@ func DefaultLimits() Limits {
 		StderrBytes:       16 << 20,
 		DiffBytes:         16 << 20,
 		ChangedFilesBytes: 1 << 20,
-		TotalBytes:        64 << 20,
+		CandidateBytes:    1 << 20,
+		// 47 MiB 的原始内容经 base64 和 JSON 封装后仍小于 Worker Protocol
+		// 的 64 MiB body 上限，避免合法采集结果在 HTTP 边界被拒绝。
+		TotalBytes: 47 << 20,
 	}
 }

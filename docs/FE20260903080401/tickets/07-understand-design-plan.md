@@ -1,6 +1,6 @@
 # 07 — Understand, Design and Plan
 
-> **状态：** 规划规格已对齐，尚未实现。
+> **状态：** 代码已实现并进入验证；顶层 `BLOCKED_BY: 06` 仍保留，Ticket 06 的真实 Codex 与原生 Windows 证据缺口尚未由本 Ticket 解除。
 
 - 里程碑：M5
 - `BLOCKED_BY`：06
@@ -28,11 +28,11 @@
 - Ticket Draft 生成、Canonical Ticket Graph 和 Ticketize Assignment。
 - Repository 全量分析、CodeMap 自动生成、概念空间构建或完整 Risk/Policy/Gate 模型。
 - 让 Runtime/Worker 直接修改 Lifecycle、Decision、Event、Database、原始 Repository 或生产 Worktree。
-- 重复实现或扩展 Ticket 06 已有的 `internal/execution/`、`internal/worker/`、`cmd/keystone-worker/` 运行边界。
+- 重复实现 Ticket 06 的运行边界；本 Ticket 只增加隔离只读 Planning 所需的 `planning_candidate` 采集和权威隔离 seam。
 
 ## 当前 checkout 边界
 
-当前 `internal/planning` 只有局部 `AGENTS.md`/`INDEX.md`，没有 Go 实现；Ticket 06 的 Runtime/Worker seam 已存在，但其完整实现和验收证据仍需在当前 checkout 中核验后，Ticket 07 才能开始代码工作。
+当前 `internal/planning` 已实现 Contract、strict decoder/validator、三阶段 Strategy 和 Coordinator；`workstore` schema v5 保存 Planning metadata、candidate、link 与阶段提交，Daemon 在进入 readiness 前完成首次耐久恢复扫描，并通过固定 revision Snapshot 下发只读 Assignment。当前实现不新增公开 planning start API，也不实现 Ticketize Graph。Ticket 06 的真实 Codex smoke 与原生 Windows 运行证据仍需单独补齐。
 
 ## 验收条件
 

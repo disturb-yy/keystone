@@ -555,7 +555,7 @@ func (s *Store) ApplyCommand(ctx context.Context, changeID domain.ChangeID, comm
 	return updated, nil
 }
 
-// ApplyDecision 持久化 HumanDecision，并在 retry 时创建新的 running AgentRun。
+// ApplyDecision 持久化 HumanDecision；legacy retry 立即创建 run，Planning retry 由 Coordinator 显式启动目标 stage。
 func (s *Store) ApplyDecision(ctx context.Context, changeID domain.ChangeID, decision string, expected domain.ChangeVersion, key, actor, reason string) (change domain.Change, err error) {
 	fingerprint := commandFingerprint("decision:"+decision, changeID, expected, actor, reason)
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -610,13 +610,15 @@ func (s *Store) ApplyDecision(ctx context.Context, changeID domain.ChangeID, dec
 		return change, err
 	}
 	if decision == domain.HumanDecisionRetry {
-		run, runErr := insertAgentRun(ctx, tx, change.ProjectID, change.ID, change.Stage, created, nil)
-		if runErr != nil {
-			return change, runErr
-		}
-		updated.LatestAgentRun = &run
-		if err := s.insertEvent(ctx, tx, change.ProjectID, change.ID, domain.AgentRunStartedType, actor, created, &run.ID, nil, nil); err != nil {
-			return change, err
+		if change.LatestAgentRun == nil || !change.LatestAgentRun.IsPlanning() {
+			run, runErr := insertAgentRun(ctx, tx, change.ProjectID, change.ID, change.Stage, created, nil)
+			if runErr != nil {
+				return change, runErr
+			}
+			updated.LatestAgentRun = &run
+			if err := s.insertEvent(ctx, tx, change.ProjectID, change.ID, domain.AgentRunStartedType, actor, created, &run.ID, nil, nil); err != nil {
+				return change, err
+			}
 		}
 	} else if decision == domain.HumanDecisionCancel {
 		if err := s.insertEvent(ctx, tx, change.ProjectID, change.ID, domain.ChangeCancelledType, actor, created, nil, nil, nil); err != nil {
@@ -718,6 +720,9 @@ func (s *Store) completeAgentRun(ctx context.Context, runID domain.AgentRunID, o
 	run, err = readAgentRun(ctx, tx, runID)
 	if err != nil {
 		return run, err
+	}
+	if run.IsPlanning() {
+		return run, domain.ErrPlanningRunConflict
 	}
 	completed := s.now().UTC()
 	if err := run.Complete(outcome, completed); err != nil {
@@ -868,21 +873,27 @@ func (s *Store) ListArtifactRefs(ctx context.Context, changeID domain.ChangeID) 
 	if _, err := readChange(ctx, s.db, changeID); err != nil {
 		return nil, err
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT artifact_ref_id, artifact_id, role, ordinal FROM t_artifact_refs WHERE change_id = ? ORDER BY created_at, artifact_ref_id`, changeID)
+	rows, err := s.db.QueryContext(ctx, `SELECT artifact_ref_id FROM t_artifact_refs WHERE change_id = ? ORDER BY created_at, artifact_ref_id`, changeID)
 	if err != nil {
 		return nil, fmt.Errorf("list artifact refs: %w", err)
 	}
-	defer rows.Close()
-	refs := make([]domain.ArtifactRef, 0)
+	ids := make([]domain.ArtifactRefID, 0)
 	for rows.Next() {
-		var ref domain.ArtifactRef
-		if err := rows.Scan(&ref.ID, &ref.ArtifactID, &ref.Role, &ref.Ordinal); err != nil {
+		var refID domain.ArtifactRefID
+		if err := rows.Scan(&refID); err != nil {
+			_ = rows.Close()
 			return nil, err
 		}
-		ref.ChangeID = changeID
-		refs = append(refs, ref)
+		ids = append(ids, refID)
 	}
-	return refs, rows.Err()
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	return readArtifactRefs(ctx, s.db, changeID, ids)
 }
 
 // ListHumanDecisions 返回按创建时间和 ID 排序的人工决定历史。
@@ -968,15 +979,17 @@ type receiptArtifactRefView struct {
 }
 
 type receiptAgentRunView struct {
-	AgentRunID  string                     `json:"agent_run_id"`
-	ChangeID    string                     `json:"change_id"`
-	Stage       string                     `json:"stage"`
-	Attempt     int                        `json:"attempt"`
-	Status      string                     `json:"status"`
-	Outcome     string                     `json:"outcome"`
-	Artifacts   []receiptAgentArtifactView `json:"artifacts"`
-	StartedAt   string                     `json:"started_at"`
-	CompletedAt *string                    `json:"completed_at"`
+	AgentRunID     string                     `json:"agent_run_id"`
+	ChangeID       string                     `json:"change_id"`
+	Stage          string                     `json:"stage"`
+	Attempt        int                        `json:"attempt"`
+	RunKind        string                     `json:"run_kind,omitempty"`
+	SourceRevision string                     `json:"source_revision,omitempty"`
+	Status         string                     `json:"status"`
+	Outcome        string                     `json:"outcome"`
+	Artifacts      []receiptAgentArtifactView `json:"artifacts"`
+	StartedAt      string                     `json:"started_at"`
+	CompletedAt    *string                    `json:"completed_at"`
 }
 
 type receiptAgentArtifactView struct {
@@ -994,7 +1007,7 @@ func receiptChangeViewFor(change domain.Change) receiptChangeView {
 	}
 	if change.LatestAgentRun != nil {
 		run := change.LatestAgentRun
-		runView := receiptAgentRunView{AgentRunID: string(run.ID), ChangeID: string(run.ChangeID), Stage: string(run.Stage), Attempt: run.Attempt, Status: run.Status, Outcome: run.Outcome, StartedAt: stamp(run.StartedAt)}
+		runView := receiptAgentRunView{AgentRunID: string(run.ID), ChangeID: string(run.ChangeID), Stage: string(run.Stage), Attempt: run.Attempt, RunKind: run.RunKind, SourceRevision: run.SourceRevision, Status: run.Status, Outcome: run.Outcome, StartedAt: stamp(run.StartedAt)}
 		runView.Artifacts = make([]receiptAgentArtifactView, 0, len(run.Artifacts))
 		for _, artifact := range run.Artifacts {
 			runView.Artifacts = append(runView.Artifacts, receiptAgentArtifactView{ArtifactRefID: string(artifact.ArtifactRefID), Role: artifact.Role, Ordinal: artifact.Ordinal})
@@ -1028,7 +1041,7 @@ func changeFromReceiptView(view receiptChangeView) (domain.Change, error) {
 		if parseErr != nil {
 			return domain.Change{}, parseErr
 		}
-		run := domain.AgentRun{ID: domain.AgentRunID(view.LatestAgentRun.AgentRunID), ChangeID: domain.ChangeID(view.LatestAgentRun.ChangeID), Stage: domain.LifecycleStage(view.LatestAgentRun.Stage), Attempt: view.LatestAgentRun.Attempt, Status: view.LatestAgentRun.Status, Outcome: view.LatestAgentRun.Outcome, StartedAt: startedAt}
+		run := domain.AgentRun{ID: domain.AgentRunID(view.LatestAgentRun.AgentRunID), ChangeID: domain.ChangeID(view.LatestAgentRun.ChangeID), Stage: domain.LifecycleStage(view.LatestAgentRun.Stage), Attempt: view.LatestAgentRun.Attempt, RunKind: view.LatestAgentRun.RunKind, SourceRevision: view.LatestAgentRun.SourceRevision, Status: view.LatestAgentRun.Status, Outcome: view.LatestAgentRun.Outcome, StartedAt: startedAt}
 		run.Artifacts = make([]domain.AgentRunArtifact, 0, len(view.LatestAgentRun.Artifacts))
 		for _, artifact := range view.LatestAgentRun.Artifacts {
 			run.Artifacts = append(run.Artifacts, domain.AgentRunArtifact{ArtifactRefID: domain.ArtifactRefID(artifact.ArtifactRefID), Role: artifact.Role, Ordinal: artifact.Ordinal})
@@ -1216,7 +1229,7 @@ type sqlQueryContext interface {
 func readAgentRun(ctx context.Context, queryer sqlQueryContext, runID domain.AgentRunID) (domain.AgentRun, error) {
 	var run domain.AgentRun
 	var started, completed sql.NullString
-	err := queryer.QueryRowContext(ctx, `SELECT agent_run_id, change_id, stage, attempt, status, outcome, started_at, completed_at FROM t_agent_runs WHERE agent_run_id = ?`, runID).Scan(&run.ID, &run.ChangeID, &run.Stage, &run.Attempt, &run.Status, &run.Outcome, &started, &completed)
+	err := queryer.QueryRowContext(ctx, `SELECT agent_run_id, change_id, stage, attempt, run_kind, source_revision, status, outcome, started_at, completed_at FROM t_agent_runs WHERE agent_run_id = ?`, runID).Scan(&run.ID, &run.ChangeID, &run.Stage, &run.Attempt, &run.RunKind, &run.SourceRevision, &run.Status, &run.Outcome, &started, &completed)
 	if errors.Is(err, sql.ErrNoRows) {
 		return domain.AgentRun{}, domain.ErrChangeNotFound
 	}

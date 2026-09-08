@@ -11,7 +11,6 @@ import (
 	"os"
 	"os/signal"
 	"strings"
-	"syscall"
 
 	"github.com/disturb-yy/keystone/internal/execution"
 	"github.com/disturb-yy/keystone/internal/execution/adapters/codex"
@@ -45,7 +44,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "create worker:", err)
 		os.Exit(1)
 	}
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	ctx, stop := signal.NotifyContext(context.Background(), workerShutdownSignals()...)
 	defer stop()
 	if err := runner.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 		fmt.Fprintln(os.Stderr, "worker stopped:", err)

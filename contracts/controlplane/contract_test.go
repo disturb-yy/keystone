@@ -237,6 +237,110 @@ func TestErrorEnvelopeJSONHasOnlyContractFields(t *testing.T) {
 	}
 }
 
+func TestArtifactRefDTOJSON(t *testing.T) {
+	tests := []struct {
+		name  string
+		input ArtifactRefDTO
+		want  string
+	}{
+		{
+			name: "legacy metadata is omitted",
+			input: ArtifactRefDTO{
+				ArtifactRefID: "0199daba-7777-7000-8000-000000000001",
+				ArtifactID:    "0199daba-7777-7000-8000-000000000002",
+				Role:          "input",
+				Ordinal:       0,
+			},
+			want: `{"artifact_ref_id":"0199daba-7777-7000-8000-000000000001","artifact_id":"0199daba-7777-7000-8000-000000000002","role":"input","ordinal":0}`,
+		},
+		{
+			name: "planning metadata is exposed",
+			input: ArtifactRefDTO{
+				ArtifactRefID:        "0199daba-7777-7000-8000-000000000003",
+				ArtifactID:           "0199daba-7777-7000-8000-000000000004",
+				Role:                 "output",
+				Ordinal:              1,
+				Kind:                 "understanding",
+				SchemaVersion:        "Understanding.v1",
+				Summary:              "已确认目标与约束",
+				SourceRevision:       "0123456789abcdef0123456789abcdef01234567",
+				InputArtifactRefIDs:  []string{"0199daba-7777-7000-8000-000000000005"},
+				RawLogArtifactRefIDs: []string{"0199daba-7777-7000-8000-000000000006"},
+			},
+			want: `{"artifact_ref_id":"0199daba-7777-7000-8000-000000000003","artifact_id":"0199daba-7777-7000-8000-000000000004","role":"output","ordinal":1,"kind":"understanding","schema_version":"Understanding.v1","summary":"已确认目标与约束","source_revision":"0123456789abcdef0123456789abcdef01234567","input_artifact_ref_ids":["0199daba-7777-7000-8000-000000000005"],"raw_log_artifact_ref_ids":["0199daba-7777-7000-8000-000000000006"]}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assertJSONRoundTrip(t, tt.input, tt.want)
+		})
+	}
+}
+
+func TestAgentRunDTOJSON(t *testing.T) {
+	tests := []struct {
+		name  string
+		input AgentRunDTO
+		want  string
+	}{
+		{
+			name: "legacy metadata is omitted",
+			input: AgentRunDTO{
+				AgentRunID: "0199daba-7777-7000-8000-000000000007",
+				ChangeID:   "0199daba-7777-7000-8000-000000000008",
+				Stage:      "Understand",
+				Attempt:    1,
+				Status:     "running",
+				Artifacts:  []AgentRunArtifactDTO{},
+				StartedAt:  "2026-09-08T08:00:00Z",
+			},
+			want: `{"agent_run_id":"0199daba-7777-7000-8000-000000000007","change_id":"0199daba-7777-7000-8000-000000000008","stage":"Understand","attempt":1,"status":"running","outcome":"","artifacts":[],"started_at":"2026-09-08T08:00:00Z","completed_at":null}`,
+		},
+		{
+			name: "planning metadata is exposed",
+			input: AgentRunDTO{
+				AgentRunID:     "0199daba-7777-7000-8000-000000000009",
+				ChangeID:       "0199daba-7777-7000-8000-00000000000a",
+				Stage:          "Plan",
+				Attempt:        2,
+				RunKind:        "planning",
+				SourceRevision: "0123456789abcdef0123456789abcdef01234567",
+				Status:         "running",
+				Artifacts:      []AgentRunArtifactDTO{},
+				StartedAt:      "2026-09-08T08:01:00Z",
+			},
+			want: `{"agent_run_id":"0199daba-7777-7000-8000-000000000009","change_id":"0199daba-7777-7000-8000-00000000000a","stage":"Plan","attempt":2,"run_kind":"planning","source_revision":"0123456789abcdef0123456789abcdef01234567","status":"running","outcome":"","artifacts":[],"started_at":"2026-09-08T08:01:00Z","completed_at":null}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assertJSONRoundTrip(t, tt.input, tt.want)
+		})
+	}
+}
+
+func assertJSONRoundTrip[T any](t *testing.T, input T, want string) {
+	t.Helper()
+
+	encoded, err := json.Marshal(input)
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+	if string(encoded) != want {
+		t.Fatalf("json.Marshal() = %s, want %s", encoded, want)
+	}
+
+	var decoded T
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	if !reflect.DeepEqual(decoded, input) {
+		t.Fatalf("decoded = %+v, want %+v", decoded, input)
+	}
+}
+
 func TestParseIdempotencyKey(t *testing.T) {
 	tests := []struct {
 		name      string

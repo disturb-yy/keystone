@@ -4,7 +4,7 @@
 
 **Blocked by：** 07-02、07-03、顶层 Ticket 06；Snapshot 的具体 Git/Worker 前置能力必须先根据当前 checkout 重新核验。
 
-**Status：** ready-for-agent（仅文档成熟度）
+**Status：** implemented-with-native-windows-validation-gap
 
 ## Snapshot boundary
 
@@ -26,7 +26,7 @@
 
 ## Daemon recovery
 
-- Daemon readiness 后扫描 active 且可恢复的 Change；扫描结果来自 Workstore，不依赖进程内队列。
+- Daemon 在进入 readiness 前同步扫描一次 active 且可恢复的 Change；后续周期和事件唤醒仍从 Workstore 读取事实，不依赖进程内队列。
 - 已完成 AgentRun 不重复执行；拥有 running AgentRun 的 Change 按 Ticket 06/Work 的 Lease、Worker 和 attempt 围栏分类处理。
 - 启动、暂停、取消、Resume 和人工 retry 都遵循“先保存事实，再决定是否调度”的顺序。
 - 成功且已被 fence 的结果可以在 Resume 后按当前 stage/attempt/base revision 重新评估；失败结果使 Change 保持 `human_required`；取消或晚到结果永不推进。

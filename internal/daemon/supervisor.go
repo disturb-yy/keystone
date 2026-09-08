@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/disturb-yy/keystone/internal/execution"
 	"github.com/disturb-yy/keystone/internal/infrastructure/id"
 	"github.com/disturb-yy/keystone/internal/infrastructure/workstore"
 )
@@ -19,9 +20,18 @@ import (
 const (
 	workerRestartInitialBackoff = time.Second
 	workerRestartMaxBackoff     = 30 * time.Second
+	workerShutdownTimeout       = 4 * time.Second
 )
 
 var errWorkerExecutableUnavailable = errors.New("keystone-worker executable is unavailable")
+var errWorkerHeartbeatExpired = errors.New("worker heartbeat or lease expired")
+
+// WorkerSupervisorStore 是子进程身份准备与退出收敛所需的最小 authority。
+type WorkerSupervisorStore interface {
+	PrepareWorker(context.Context, string, string) error
+	WorkerProcessLost(context.Context, string) (bool, error)
+	ReconcileWorkerLost(context.Context, string) error
+}
 
 // WorkerCommandFactory 是 Worker 子进程启动 seam；secret 只通过 stdin 管道传递。
 type WorkerCommandFactory func(context.Context, string, ...string) *exec.Cmd
@@ -33,7 +43,7 @@ type WorkerSupervisorOptions struct {
 	// Endpoint 是 Worker Protocol 的 loopback endpoint。
 	Endpoint string
 	// Store 是持有 WorkerInstance、Lease 和 AgentRun authority 的同一 Work Store。
-	Store *workstore.Store
+	Store WorkerSupervisorStore
 	// Executable 为空时按 Daemon 同目录、PATH 顺序发现 keystone-worker。
 	Executable string
 	// Command 覆盖真实 exec.Cmd 构造，用于监管测试。
@@ -42,6 +52,8 @@ type WorkerSupervisorOptions struct {
 	Sleep func(context.Context, time.Duration) error
 	// ShutdownTimeout 是停止 Worker 的有界宽限期。
 	ShutdownTimeout time.Duration
+	// WatchInterval 是 Supervisor 复检耐久 heartbeat/Lease 的周期。
+	WatchInterval time.Duration
 }
 
 // WorkerSupervisor 保持最多一个独立 Worker 子进程，并为每次启动生成新身份。
@@ -50,16 +62,23 @@ type WorkerSupervisor struct {
 
 	mu       sync.Mutex
 	cancel   context.CancelFunc
-	current  *exec.Cmd
+	current  *execution.ProcessTree
 	workerID string
 	done     chan struct{}
 	stopOnce sync.Once
+	stopErr  error
+	lastErr  error
 }
 
 // NewWorkerSupervisor 创建尚未启动的 Supervisor。
 func NewWorkerSupervisor(options WorkerSupervisorOptions) *WorkerSupervisor {
 	if options.ShutdownTimeout <= 0 {
-		options.ShutdownTimeout = 2 * time.Second
+		// Worker 收到取消后还要等待 Runtime 自己清扫 Codex 子树；宽限期
+		// 必须覆盖这一层，Supervisor 才能在释放 Snapshot 前观察到 Worker 退出。
+		options.ShutdownTimeout = workerShutdownTimeout
+	}
+	if options.WatchInterval <= 0 {
+		options.WatchInterval = workstore.WorkerHeartbeatInterval()
 	}
 	if options.Sleep == nil {
 		options.Sleep = sleepSupervisor
@@ -104,36 +123,46 @@ func (s *WorkerSupervisor) Stop(ctx context.Context) error {
 		return nil
 	}
 	s.stopOnce.Do(func() {
-		s.mu.Lock()
-		cancel, current, done := s.cancel, s.current, s.done
-		s.mu.Unlock()
-		if cancel == nil {
-			return
-		}
-		cancel()
-		if current != nil && current.Process != nil {
-			_ = current.Process.Signal(os.Interrupt)
-		}
-		if done == nil {
-			return
-		}
-		wait := ctx
-		if wait == nil {
-			wait = context.Background()
-		}
-		select {
-		case <-done:
-		case <-wait.Done():
-			if current != nil && current.Process != nil {
-				_ = current.Process.Kill()
-			}
-			select {
-			case <-done:
-			case <-time.After(time.Second):
-			}
-		}
+		s.stopErr = s.stop(ctx)
 	})
-	return nil
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.stopErr
+}
+
+// Err 返回阻止安全启动下一 Worker 的最近一次监管错误。
+func (s *WorkerSupervisor) Err() error {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.lastErr
+}
+
+func (s *WorkerSupervisor) stop(ctx context.Context) error {
+	s.mu.Lock()
+	cancel, done := s.cancel, s.done
+	s.mu.Unlock()
+	if cancel == nil {
+		return nil
+	}
+	cancel()
+	if done == nil {
+		return errors.New("stop worker supervisor: completion signal is unavailable")
+	}
+	waitParent := ctx
+	if waitParent == nil {
+		waitParent = context.Background()
+	}
+	wait, stopWaiting := context.WithTimeout(waitParent, s.options.ShutdownTimeout)
+	defer stopWaiting()
+	select {
+	case <-done:
+		return nil
+	case <-wait.Done():
+	}
+	return fmt.Errorf("stop worker supervisor: %w", wait.Err())
 }
 
 func (s *WorkerSupervisor) run(ctx context.Context, executable string) {
@@ -145,22 +174,39 @@ func (s *WorkerSupervisor) run(ctx context.Context, executable string) {
 		}
 		workerID := id.New()
 		secret, err := workstore.NewWorkerSecret()
+		prepared := false
 		if err == nil {
 			err = s.options.Store.PrepareWorker(ctx, workerID, secret)
+			prepared = err == nil
 		}
 		if err == nil {
+			s.setErr(nil)
 			err = s.runProcess(ctx, executable, workerID, secret)
 		}
 		if ctx.Err() != nil {
 			return
 		}
-		_ = s.options.Store.ReconcileWorkerLost(context.Background(), workerID)
+		if prepared {
+			if reconcileErr := s.reconcileWorkerLost(ctx, workerID); reconcileErr != nil {
+				if ctx.Err() != nil {
+					return
+				}
+				s.setErr(reconcileErr)
+				return
+			}
+		}
+		if ctx.Err() != nil {
+			return
+		}
 		if err == nil {
 			backoff = workerRestartInitialBackoff
-		} else if backoff < workerRestartMaxBackoff {
-			backoff *= 2
-			if backoff > workerRestartMaxBackoff {
-				backoff = workerRestartMaxBackoff
+		} else {
+			s.setErr(err)
+			if backoff < workerRestartMaxBackoff {
+				backoff *= 2
+				if backoff > workerRestartMaxBackoff {
+					backoff = workerRestartMaxBackoff
+				}
 			}
 		}
 		if err := s.options.Sleep(ctx, backoff); err != nil {
@@ -169,8 +215,43 @@ func (s *WorkerSupervisor) run(ctx context.Context, executable string) {
 	}
 }
 
+func (s *WorkerSupervisor) reconcileWorkerLost(ctx context.Context, workerID string) error {
+	backoff := workerRestartInitialBackoff
+	for {
+		attemptCtx, cancel := context.WithTimeout(ctx, s.options.ShutdownTimeout)
+		err := s.options.Store.ReconcileWorkerLost(attemptCtx, workerID)
+		cancel()
+		if err == nil {
+			s.setErr(nil)
+			return nil
+		}
+		wrapped := fmt.Errorf("reconcile lost worker: %w", err)
+		s.setErr(wrapped)
+		if ctx.Err() != nil {
+			return errors.Join(wrapped, ctx.Err())
+		}
+		if err := s.options.Sleep(ctx, backoff); err != nil {
+			return errors.Join(wrapped, err)
+		}
+		if backoff < workerRestartMaxBackoff {
+			backoff *= 2
+			if backoff > workerRestartMaxBackoff {
+				backoff = workerRestartMaxBackoff
+			}
+		}
+	}
+}
+
+func (s *WorkerSupervisor) setErr(err error) {
+	s.mu.Lock()
+	s.lastErr = err
+	s.mu.Unlock()
+}
+
 func (s *WorkerSupervisor) runProcess(ctx context.Context, executable, workerID, secret string) error {
-	command := s.options.Command(ctx, executable, "--daemon-endpoint", s.options.Endpoint, "--worker-id", workerID)
+	// Supervisor 自己管理整棵进程树；不能让 CommandContext 在 Daemon cancel 时
+	// 先于 Worker 的优雅取消路径单杀父进程。
+	command := s.options.Command(context.WithoutCancel(ctx), executable, "--daemon-endpoint", s.options.Endpoint, "--worker-id", workerID)
 	if command == nil {
 		return errors.New("create worker process: nil command")
 	}
@@ -180,31 +261,66 @@ func (s *WorkerSupervisor) runProcess(ctx context.Context, executable, workerID,
 	if err != nil {
 		return fmt.Errorf("create worker startup pipe: %w", err)
 	}
-	if err := command.Start(); err != nil {
+	tree, err := execution.StartProcessTree(command)
+	if err != nil {
 		_ = stdin.Close()
 		return fmt.Errorf("start worker process: %w", err)
 	}
 	s.mu.Lock()
-	s.current = command
+	s.current = tree
 	s.workerID = workerID
 	s.mu.Unlock()
+	defer func() {
+		_ = tree.Wait()
+		s.mu.Lock()
+		if s.current == tree {
+			s.current = nil
+			s.workerID = ""
+		}
+		s.mu.Unlock()
+	}()
 	_, writeErr := io.WriteString(stdin, secret+"\n")
 	closeErr := stdin.Close()
-	waitErr := command.Wait()
-	s.mu.Lock()
-	s.current = nil
-	s.workerID = ""
-	s.mu.Unlock()
 	if writeErr != nil {
-		return fmt.Errorf("write worker startup pipe: %w", writeErr)
+		return errors.Join(fmt.Errorf("write worker startup pipe: %w", writeErr), execution.TerminateProcessTree(tree, s.processStopBudget()))
 	}
 	if closeErr != nil {
-		return fmt.Errorf("close worker startup pipe: %w", closeErr)
+		return errors.Join(fmt.Errorf("close worker startup pipe: %w", closeErr), execution.TerminateProcessTree(tree, s.processStopBudget()))
 	}
-	if waitErr != nil {
-		return fmt.Errorf("worker process exited: %w", waitErr)
+	ticker := time.NewTicker(s.options.WatchInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-tree.Done():
+			if waitErr := tree.Wait(); waitErr != nil {
+				return fmt.Errorf("worker process exited: %w", waitErr)
+			}
+			return nil
+		case <-ctx.Done():
+			return errors.Join(ctx.Err(), execution.TerminateProcessTree(tree, s.processStopBudget()))
+		case <-ticker.C:
+			probeCtx, cancel := context.WithTimeout(ctx, s.options.WatchInterval)
+			lost, probeErr := s.options.Store.WorkerProcessLost(probeCtx, workerID)
+			cancel()
+			if probeErr != nil {
+				s.setErr(fmt.Errorf("inspect worker liveness: %w", probeErr))
+				continue
+			}
+			s.setErr(nil)
+			if !lost {
+				continue
+			}
+			return errors.Join(errWorkerHeartbeatExpired, execution.TerminateProcessTree(tree, s.processStopBudget()))
+		}
 	}
-	return nil
+}
+
+func (s *WorkerSupervisor) processStopBudget() time.Duration {
+	budget := s.options.ShutdownTimeout
+	if budget <= 0 {
+		return time.Second
+	}
+	return budget
 }
 
 func discoverWorkerExecutable(explicit string) (string, error) {

@@ -14,8 +14,8 @@
 - `Register` 包含 `worker_id`、`protocol_version` 和 `capabilities`；Response 不包含 secret。
 - `Heartbeat` 可携带 `agent_run_id` 和不回显的 `lease_token_sha256`。
 - `PullResponse.assignment` 无任务时固定编码为 `null`。
-- `Assignment` 包含 `agent_run_id`、opaque `lease_token`、Lease/Workspace/Runtime/输入摘要字段。
-- `Report` 包含 exit/time/revision、四类有界 Artifact、capture failure 和 guard finding；authority 仍由 Daemon 解释。
+- `Assignment` 包含 `agent_run_id`、opaque `lease_token`、Lease/Workspace/Runtime/输入摘要字段；Planning Assignment 以 `result_mode=planning_candidate` 请求候选结果。
+- `Report` 包含 exit/time/revision、执行证据与可选 candidate Artifact、capture failure 和 guard finding；authority 仍由 Daemon 解释。
 - 本包没有 HTTP Handler、Daemon、真实 Runtime、Domain、SQLite 或状态推进实现。
 
 ## 验证

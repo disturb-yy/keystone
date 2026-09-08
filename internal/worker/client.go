@@ -9,9 +9,12 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	workercontract "github.com/disturb-yy/keystone/contracts/worker"
 )
+
+const defaultWorkerRequestTimeout = 10 * time.Second
 
 // ProtocolError 表示 Daemon 返回的稳定协议错误，不包含响应原文。
 type ProtocolError struct {
@@ -41,7 +44,7 @@ type Client struct {
 // NewClient 创建 Worker Protocol Client；endpoint 可以是 host:port 或带 scheme 的 URL。
 func NewClient(endpoint, secret string, httpClient *http.Client) *Client {
 	if httpClient == nil {
-		httpClient = &http.Client{}
+		httpClient = &http.Client{Timeout: defaultWorkerRequestTimeout}
 	}
 	base := strings.TrimRight(endpoint, "/")
 	if !strings.Contains(base, "://") {
@@ -82,11 +85,22 @@ func (c *Client) do(ctx context.Context, method, route string, request, response
 	if c == nil || c.HTTPClient == nil || strings.TrimSpace(c.BaseURL) == "" || c.Secret == "" {
 		return errors.New("worker protocol client is not configured")
 	}
+	if ctx == nil {
+		return errors.New("worker protocol request: context is required")
+	}
 	body, err := json.Marshal(request)
 	if err != nil {
 		return fmt.Errorf("encode worker protocol request: %w", err)
 	}
-	httpRequest, err := http.NewRequestWithContext(ctx, method, c.BaseURL+route, strings.NewReader(string(body)))
+	requestContext := ctx
+	var cancel context.CancelFunc
+	// 调用方可能注入没有 Timeout 的 http.Client；请求级 deadline 仍需限制
+	// Worker 对 Daemon 的等待，避免失联时永久卡住 Pull、Heartbeat 或 Report。
+	if c.HTTPClient.Timeout <= 0 {
+		requestContext, cancel = context.WithTimeout(ctx, defaultWorkerRequestTimeout)
+		defer cancel()
+	}
+	httpRequest, err := http.NewRequestWithContext(requestContext, method, c.BaseURL+route, strings.NewReader(string(body)))
 	if err != nil {
 		return fmt.Errorf("create worker protocol request: %w", err)
 	}

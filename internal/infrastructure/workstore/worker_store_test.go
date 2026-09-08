@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/base64"
+	"errors"
 	"testing"
 	"time"
 
@@ -58,7 +59,7 @@ func TestWorkerAssignmentReportDuplicateAndLateTrace(t *testing.T) {
 	exitCode := 0
 	report := workercontract.Report{
 		AgentRunID: string(run.ID), LeaseToken: assignment.LeaseToken, Attempt: run.Attempt,
-		Outcome: workercontract.Outcome("failed"), ExitCode: &exitCode,
+		Outcome: workercontract.Outcome("succeeded"), ExitCode: &exitCode,
 		Artifacts: []workercontract.Artifact{{Kind: "stdout", ContentBase64: base64.StdEncoding.EncodeToString(content), SHA256: identity.SHA256, SizeBytes: identity.ByteLength}},
 	}
 	response, err := store.ReportWorkerFor(ctx, workerID, report, artifactStore)
@@ -68,6 +69,7 @@ func TestWorkerAssignmentReportDuplicateAndLateTrace(t *testing.T) {
 	if response.Disposition != "accepted" || response.LeaseState != "consumed" {
 		t.Fatalf("first report = %+v, want accepted/consumed", response)
 	}
+	assertNoLeaseTokens(t, store)
 	replay, err := store.ReportWorkerFor(ctx, workerID, report, artifactStore)
 	if err != nil {
 		t.Fatal(err)
@@ -81,6 +83,9 @@ func TestWorkerAssignmentReportDuplicateAndLateTrace(t *testing.T) {
 	}
 	if len(events) != 4 || events[2].Type != domain.AgentRunCompletedType || events[3].Type != domain.StageAdvancedType {
 		t.Fatalf("events after duplicate = %+v", events)
+	}
+	if _, err := store.HeartbeatWorker(ctx, workercontract.Heartbeat{WorkerID: workerID}); err != nil {
+		t.Fatal(err)
 	}
 
 	lateRun, err := store.StartAgentRun(ctx, change.ID, "test")
@@ -116,6 +121,60 @@ func TestWorkerAssignmentReportDuplicateAndLateTrace(t *testing.T) {
 	}
 	if len(events) != 6 || events[5].Type != domain.AgentRunReportLateType {
 		t.Fatalf("events after late report = %+v", events)
+	}
+}
+
+func TestExpiredWorkerRequiresIdleHeartbeatBeforeReuse(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+	_, firstChange := createTestChange(t, store, t.TempDir(), "busy-worker-project-1", "busy-worker-change-1")
+	_, secondChange := createTestChange(t, store, t.TempDir(), "busy-worker-project-2", "busy-worker-change-2")
+	workerID := registerPlanningWorker(t, store, "busy-worker")
+	firstRun, err := store.StartAgentRun(ctx, firstChange.ID, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	assignment, err := store.IssueAssignment(ctx, firstRun.ID, workerID, t.TempDir(), "codex", "first", firstChange.BaseRevision, "first-workspace", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondRun, err := store.StartAgentRun(ctx, secondChange.ID, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldNow := store.now
+	store.now = func() time.Time { return oldNow().Add(workerLeaseTTL + time.Second) }
+	if available, ok, err := store.AvailableWorker(ctx, "runtime:codex"); err != nil || ok || available != "" {
+		t.Fatalf("expired busy worker availability = %q/%t, err=%v", available, ok, err)
+	}
+	assertNoLeaseTokens(t, store)
+	if _, err := store.IssueAssignment(ctx, secondRun.ID, workerID, t.TempDir(), "codex", "second", secondChange.BaseRevision, "second-workspace", nil); !errors.Is(err, ErrWorkerNotRegistered) {
+		t.Fatalf("stale worker assignment error = %v, want ErrWorkerNotRegistered", err)
+	}
+	activeHeartbeat, err := store.HeartbeatWorker(ctx, workercontract.Heartbeat{WorkerID: workerID, AgentRunID: string(firstRun.ID), LeaseTokenSHA256: hashSecret(assignment.LeaseToken)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if activeHeartbeat.LeaseRenewed || activeHeartbeat.WorkerAvailable {
+		t.Fatalf("expired active heartbeat = %+v", activeHeartbeat)
+	}
+	if idleHeartbeat, err := store.HeartbeatWorker(ctx, workercontract.Heartbeat{WorkerID: workerID}); err != nil || !idleHeartbeat.WorkerAvailable {
+		t.Fatalf("idle heartbeat = %+v, err=%v", idleHeartbeat, err)
+	}
+	if available, ok, err := store.AvailableWorker(ctx, "runtime:codex"); err != nil || !ok || available != workerID {
+		t.Fatalf("idle worker availability = %q/%t, err=%v", available, ok, err)
+	}
+	if _, err := store.IssueAssignment(ctx, secondRun.ID, workerID, t.TempDir(), "codex", "second", secondChange.BaseRevision, "second-workspace", nil); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func assertNoLeaseTokens(t *testing.T, store *Store) {
+	t.Helper()
+	store.leaseMu.RLock()
+	defer store.leaseMu.RUnlock()
+	if len(store.leaseTokens) != 0 {
+		t.Fatalf("terminal leases retained %d plaintext tokens", len(store.leaseTokens))
 	}
 }
 

@@ -5,4 +5,6 @@
 - 不依赖 HTTP、SQL、文件系统、配置或基础设施实现。
 - `ProjectID` 必须是小写 canonical、RFC4122 variant 的 UUIDv7；`RepositoryBinding` 必须是绝对、规范化的非 bare 主工作树根。
 - `ProjectInitialized` 只表示当前 LocalStateRoot 内 Project 首次成为权威记录；Change 生命周期事实通过独立领域模型表达。
+- 旧 `ArtifactRef` 的 Planning metadata 允许保持空值；新 Planning 引用必须携带可验证的 kind、source revision 及有序 input/raw-log 关联。
+- `AgentRunKindPlanning` 必须携带固定 source revision；Planning candidate 不是 AgentRun 终态或 Change 阶段推进命令。
 - 修改后运行本 package 的聚焦测试及根级 Go 验证。

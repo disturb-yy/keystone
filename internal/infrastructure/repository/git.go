@@ -1,4 +1,4 @@
-// Package repository 提供 Project Bootstrap 使用的只读 Git 适配器。
+// Package repository 提供 Project Bootstrap 和 Planning Snapshot 使用的 Git 适配器。
 package repository
 
 import (
@@ -13,7 +13,10 @@ import (
 )
 
 // Git 提供真实 Git Repository 的拓扑识别。
-type Git struct{}
+type Git struct {
+	// SnapshotBase 指定 Daemon 持有的 Planning Snapshot 父目录；空值仅供独立调用使用系统临时目录。
+	SnapshotBase string
+}
 
 // Snapshot 连续读取两次干净状态和 HEAD，确认 Change 的 BaseRevision 稳定。
 //

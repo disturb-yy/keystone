@@ -12,10 +12,12 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	pathpkg "path"
 	"path/filepath"
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	workercontract "github.com/disturb-yy/keystone/contracts/worker"
 	"github.com/disturb-yy/keystone/internal/infrastructure/id"
@@ -23,11 +25,13 @@ import (
 )
 
 const (
-	workerHeartbeatInterval = 5 * time.Second
-	workerLeaseTTL          = 30 * time.Second
-	maxWorkerArtifactBytes  = 16 << 20
-	maxChangedFilesBytes    = 1 << 20
-	maxWorkerReportBytes    = 64 << 20
+	workerHeartbeatInterval   = 5 * time.Second
+	workerLeaseTTL            = 30 * time.Second
+	maxWorkerArtifactBytes    = 16 << 20
+	maxPlanningCandidateBytes = 1 << 20
+	maxChangedFilesBytes      = 1 << 20
+	// 47 MiB 原始内容经 base64 与 JSON 封装后仍可进入 64 MiB Worker Protocol body。
+	maxWorkerReportBytes = 47 << 20
 )
 
 var (
@@ -57,6 +61,84 @@ func WorkerHeartbeatInterval() time.Duration { return workerHeartbeatInterval }
 
 // WorkerLeaseTTL 返回新 Lease 的默认有效期。
 func WorkerLeaseTTL() time.Duration { return workerLeaseTTL }
+
+// WorkerProcessLost 判断受监管 Worker 是否已经越过可证明的心跳或 Lease 边界。
+// 本方法只报告事实；Supervisor 必须先停稳 OS 进程树，再调用 ReconcileWorkerLost。
+func (s *Store) WorkerProcessLost(ctx context.Context, workerID string) (bool, error) {
+	if ctx == nil || strings.TrimSpace(workerID) == "" {
+		return false, fmt.Errorf("inspect worker process: %w", domain.ErrInvalidRequest)
+	}
+	var status, created string
+	var registeredAt, heartbeatAt sql.NullString
+	err := s.db.QueryRowContext(ctx, `SELECT status, created_at, registered_at, last_heartbeat_at FROM t_worker_instances WHERE worker_id = ?`, workerID).Scan(&status, &created, &registeredAt, &heartbeatAt)
+	if errors.Is(err, sqlErrNoRows()) {
+		return true, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("inspect worker process: %w", ErrWorkerUnavailable)
+	}
+	if status == "revoked" {
+		return true, nil
+	}
+	var leaseState, leaseExpires string
+	err = s.db.QueryRowContext(ctx, `
+SELECT lease.state, lease.expires_at
+FROM t_worker_leases lease
+JOIN t_agent_runs run ON run.agent_run_id = lease.agent_run_id
+WHERE lease.worker_id = ?
+  AND lease.report_digest IS NULL
+  AND run.status = 'running'
+  AND NOT (
+      run.run_kind = 'planning'
+      AND EXISTS (
+          SELECT 1 FROM t_planning_run_candidates candidate
+          WHERE candidate.agent_run_id = run.agent_run_id
+      )
+  )
+ORDER BY lease.created_at DESC, lease.lease_id DESC
+LIMIT 1`, workerID).Scan(&leaseState, &leaseExpires)
+	if err == nil {
+		deadline, parseErr := parseStamp(leaseExpires)
+		if parseErr != nil {
+			return false, fmt.Errorf("inspect worker lease deadline: %w", ErrWorkerUnavailable)
+		}
+		return leaseState != "active" || !s.now().UTC().Before(deadline), nil
+	}
+	if !errors.Is(err, sqlErrNoRows()) {
+		return false, fmt.Errorf("inspect worker lease: %w", ErrWorkerUnavailable)
+	}
+
+	latest, err := parseStamp(created)
+	if err != nil {
+		return false, fmt.Errorf("inspect worker creation: %w", ErrWorkerUnavailable)
+	}
+	for _, value := range []sql.NullString{registeredAt, heartbeatAt} {
+		if !value.Valid {
+			continue
+		}
+		observed, parseErr := parseStamp(value.String)
+		if parseErr != nil {
+			return false, fmt.Errorf("inspect worker heartbeat: %w", ErrWorkerUnavailable)
+		}
+		if observed.After(latest) {
+			latest = observed
+		}
+	}
+	var consumedAt sql.NullString
+	if err := s.db.QueryRowContext(ctx, `SELECT MAX(consumed_at) FROM t_worker_leases WHERE worker_id = ?`, workerID).Scan(&consumedAt); err != nil {
+		return false, fmt.Errorf("inspect worker completion: %w", ErrWorkerUnavailable)
+	}
+	if consumedAt.Valid {
+		observed, parseErr := parseStamp(consumedAt.String)
+		if parseErr != nil {
+			return false, fmt.Errorf("inspect worker completion: %w", ErrWorkerUnavailable)
+		}
+		if observed.After(latest) {
+			latest = observed
+		}
+	}
+	return !s.now().UTC().Before(latest.Add(workerLeaseTTL)), nil
+}
 
 // NewWorkerSecret 生成只在当前 Worker 进程和启动管道中存在的 secret。
 func NewWorkerSecret() (string, error) {
@@ -162,12 +244,51 @@ func (s *Store) RegisterWorker(ctx context.Context, request workercontract.Regis
 	}, nil
 }
 
+// AvailableWorker 返回具备 capability 且当前没有 active Lease 的首个已注册 Worker。
+func (s *Store) AvailableWorker(ctx context.Context, capability string) (string, bool, error) {
+	if ctx == nil || strings.TrimSpace(capability) == "" {
+		return "", false, fmt.Errorf("find available worker: %w", domain.ErrInvalidRequest)
+	}
+	now := stamp(s.now().UTC())
+	if _, err := s.db.ExecContext(ctx, `UPDATE t_worker_leases SET state = 'expired', workspace_path = CASE WHEN result_mode = 'planning_candidate' THEN '' ELSE workspace_path END WHERE state = 'active' AND expires_at <= ?`, now); err != nil {
+		return "", false, fmt.Errorf("expire worker leases: %w", ErrWorkerUnavailable)
+	}
+	if err := s.forgetTerminalLeaseTokens(ctx); err != nil {
+		return "", false, err
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT worker_id, capabilities_json FROM t_worker_instances w WHERE status = 'registered' AND last_heartbeat_at IS NOT NULL AND NOT EXISTS (SELECT 1 FROM t_worker_leases l WHERE l.worker_id = w.worker_id AND l.state = 'active') ORDER BY registered_at, worker_id`)
+	if err != nil {
+		return "", false, fmt.Errorf("list available workers: %w", ErrWorkerUnavailable)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var workerID, encoded string
+		if err := rows.Scan(&workerID, &encoded); err != nil {
+			return "", false, fmt.Errorf("scan available worker: %w", ErrWorkerUnavailable)
+		}
+		var capabilities []string
+		if err := json.Unmarshal([]byte(encoded), &capabilities); err != nil {
+			return "", false, fmt.Errorf("decode worker capabilities: %w", ErrWorkerUnavailable)
+		}
+		if containsWorkerCapability(capabilities, capability) {
+			return workerID, true, nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return "", false, fmt.Errorf("list available workers: %w", ErrWorkerUnavailable)
+	}
+	return "", false, nil
+}
+
 // HeartbeatWorker 只为当前 Worker 的匹配 active Lease 续租。
 func (s *Store) HeartbeatWorker(ctx context.Context, request workercontract.Heartbeat) (workercontract.HeartbeatResponse, error) {
 	if err := request.Validate(); err != nil {
 		return workercontract.HeartbeatResponse{}, fmt.Errorf("heartbeat worker: %w", ErrWorkerNotRegistered)
 	}
 	now := s.now().UTC()
+	if request.AgentRunID == "" {
+		return s.heartbeatIdleWorker(ctx, request.WorkerID, now)
+	}
 	var status string
 	if err := s.db.QueryRowContext(ctx, `SELECT status FROM t_worker_instances WHERE worker_id = ?`, request.WorkerID).Scan(&status); err != nil {
 		if errors.Is(err, sqlErrNoRows()) {
@@ -178,13 +299,7 @@ func (s *Store) HeartbeatWorker(ctx context.Context, request workercontract.Hear
 	if status != "registered" {
 		return workercontract.HeartbeatResponse{}, ErrWorkerNotRegistered
 	}
-	response := workercontract.HeartbeatResponse{WorkerID: request.WorkerID, WorkerAvailable: true}
-	if request.AgentRunID == "" {
-		if _, err := s.db.ExecContext(ctx, `UPDATE t_worker_instances SET last_heartbeat_at = ? WHERE worker_id = ?`, stamp(now), request.WorkerID); err != nil {
-			return workercontract.HeartbeatResponse{}, fmt.Errorf("record worker heartbeat: %w", ErrWorkerUnavailable)
-		}
-		return response, nil
-	}
+	response := workercontract.HeartbeatResponse{WorkerID: request.WorkerID}
 	var leaseID, tokenDigest, state, expires string
 	err := s.db.QueryRowContext(ctx, `SELECT lease_id, token_sha256, state, expires_at FROM t_worker_leases WHERE agent_run_id = ? AND worker_id = ?`, request.AgentRunID, request.WorkerID).Scan(&leaseID, &tokenDigest, &state, &expires)
 	if errors.Is(err, sqlErrNoRows()) {
@@ -199,20 +314,95 @@ func (s *Store) HeartbeatWorker(ctx context.Context, request workercontract.Hear
 	}
 	deadline, err := parseStamp(expires)
 	if err != nil || !now.Before(deadline) {
-		_, _ = s.db.ExecContext(ctx, `UPDATE t_worker_leases SET state = 'expired' WHERE lease_id = ? AND state = 'active'`, leaseID)
+		if result, updateErr := s.db.ExecContext(ctx, `UPDATE t_worker_leases SET state = 'expired', workspace_path = CASE WHEN result_mode = 'planning_candidate' THEN '' ELSE workspace_path END WHERE lease_id = ? AND state = 'active'`, leaseID); updateErr == nil {
+			if count, rowsErr := result.RowsAffected(); rowsErr == nil && count == 1 {
+				s.forgetLeaseToken(leaseID)
+			}
+		}
 		return response, nil
 	}
 	newDeadline := now.Add(workerLeaseTTL)
-	if _, err := s.db.ExecContext(ctx, `UPDATE t_worker_leases SET expires_at = ? WHERE lease_id = ? AND state = 'active'`, stamp(newDeadline), leaseID); err != nil {
+	result, err := s.db.ExecContext(ctx, `UPDATE t_worker_leases SET expires_at = ? WHERE lease_id = ? AND state = 'active' AND expires_at = ?`, stamp(newDeadline), leaseID, expires)
+	if err != nil {
 		return workercontract.HeartbeatResponse{}, fmt.Errorf("renew worker lease: %w", ErrWorkerUnavailable)
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return workercontract.HeartbeatResponse{}, fmt.Errorf("renew worker lease: %w", ErrWorkerUnavailable)
+	}
+	if count != 1 {
+		return response, nil
 	}
 	response.LeaseRenewed = true
 	response.LeaseExpiresAt = stamp(newDeadline)
 	return response, nil
 }
 
+// heartbeatIdleWorker 把 Worker 的空闲声明作为“当前没有 Runtime 使用旧 Workspace”的显式确认。
+// 只有这个确认、终态 Report 或 Supervisor 进程退出才能让过期 Planning run 形成失败候选。
+func (s *Store) heartbeatIdleWorker(ctx context.Context, workerID string, now time.Time) (workercontract.HeartbeatResponse, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return workercontract.HeartbeatResponse{}, fmt.Errorf("begin idle worker heartbeat: %w", ErrWorkerUnavailable)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+	var status string
+	if err := tx.QueryRowContext(ctx, `SELECT status FROM t_worker_instances WHERE worker_id = ?`, workerID).Scan(&status); err != nil || status != "registered" {
+		return workercontract.HeartbeatResponse{}, ErrWorkerNotRegistered
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE t_worker_leases SET state = 'expired', workspace_path = '' WHERE worker_id = ? AND result_mode = 'planning_candidate' AND state = 'active' AND expires_at <= ?`, workerID, stamp(now)); err != nil {
+		return workercontract.HeartbeatResponse{}, fmt.Errorf("expire idle worker planning leases: %w", ErrWorkerUnavailable)
+	}
+	runIDs, err := runningPlanningRunIDs(ctx, tx, workerID, false)
+	if err != nil {
+		return workercontract.HeartbeatResponse{}, err
+	}
+	for _, runID := range runIDs {
+		if err := insertPlanningSystemCandidate(ctx, tx, runID, "lease_expired", now); err != nil {
+			return workercontract.HeartbeatResponse{}, err
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE t_worker_instances SET last_heartbeat_at = ? WHERE worker_id = ? AND status = 'registered'`, stamp(now), workerID); err != nil {
+		return workercontract.HeartbeatResponse{}, fmt.Errorf("record worker heartbeat: %w", ErrWorkerUnavailable)
+	}
+	if err := tx.Commit(); err != nil {
+		return workercontract.HeartbeatResponse{}, fmt.Errorf("commit idle worker heartbeat: %w", ErrWorkerUnavailable)
+	}
+	committed = true
+	if err := s.forgetTerminalLeaseTokens(ctx); err != nil {
+		return workercontract.HeartbeatResponse{}, err
+	}
+	return workercontract.HeartbeatResponse{WorkerID: workerID, WorkerAvailable: true}, nil
+}
+
 // IssueAssignment 为已创建的 running AgentRun 发放一个不可复用 Lease。
 func (s *Store) IssueAssignment(ctx context.Context, runID domain.AgentRunID, workerID, workspacePath, runtime, instruction, beforeRevision, workspaceID string, inputs []workercontract.ArtifactSummary) (workercontract.Assignment, error) {
+	return s.issueAssignment(ctx, runID, workerID, workspacePath, runtime, instruction, beforeRevision, workspaceID, inputs, "")
+}
+
+// IssuePlanningAssignment 为 Planning run 发放只返回非权威 candidate 的 Lease。
+func (s *Store) IssuePlanningAssignment(ctx context.Context, runID domain.AgentRunID, workerID, workspacePath, runtime, instruction, beforeRevision, workspaceID string, inputs []workercontract.ArtifactSummary) (workercontract.Assignment, error) {
+	return s.issueAssignment(ctx, runID, workerID, workspacePath, runtime, instruction, beforeRevision, workspaceID, inputs, workercontract.ResultModePlanningCandidate)
+}
+
+// PlanningRunAssigned 报告当前 Planning run 是否已经持有过不可复用的 Assignment Lease。
+func (s *Store) PlanningRunAssigned(ctx context.Context, runID domain.AgentRunID) (bool, error) {
+	if ctx == nil || runID == "" {
+		return false, domain.ErrInvalidRequest
+	}
+	var count int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM t_worker_leases lease JOIN t_agent_runs run ON run.agent_run_id = lease.agent_run_id WHERE lease.agent_run_id = ? AND run.run_kind = 'planning'`, runID).Scan(&count); err != nil {
+		return false, fmt.Errorf("inspect planning assignment: %w", ErrWorkerUnavailable)
+	}
+	return count != 0, nil
+}
+
+func (s *Store) issueAssignment(ctx context.Context, runID domain.AgentRunID, workerID, workspacePath, runtime, instruction, beforeRevision, workspaceID string, inputs []workercontract.ArtifactSummary, resultMode string) (workercontract.Assignment, error) {
 	if ctx == nil || runID == "" || strings.TrimSpace(workerID) == "" || strings.TrimSpace(runtime) == "" {
 		return workercontract.Assignment{}, fmt.Errorf("issue worker assignment: %w", domain.ErrInvalidRequest)
 	}
@@ -248,13 +438,14 @@ func (s *Store) IssueAssignment(ctx context.Context, runID domain.AgentRunID, wo
 		}
 	}()
 	var workerStatus, capabilitiesJSON string
-	if err := tx.QueryRowContext(ctx, `SELECT status, capabilities_json FROM t_worker_instances WHERE worker_id = ?`, workerID).Scan(&workerStatus, &capabilitiesJSON); err != nil {
+	var idleAt sql.NullString
+	if err := tx.QueryRowContext(ctx, `SELECT status, capabilities_json, last_heartbeat_at FROM t_worker_instances WHERE worker_id = ?`, workerID).Scan(&workerStatus, &capabilitiesJSON, &idleAt); err != nil {
 		if errors.Is(err, sqlErrNoRows()) {
 			return workercontract.Assignment{}, ErrWorkerNotRegistered
 		}
 		return workercontract.Assignment{}, fmt.Errorf("read assignment worker: %w", err)
 	}
-	if workerStatus != "registered" {
+	if workerStatus != "registered" || !idleAt.Valid {
 		return workercontract.Assignment{}, ErrWorkerNotRegistered
 	}
 	var capabilities []string
@@ -267,6 +458,25 @@ func (s *Store) IssueAssignment(ctx context.Context, runID domain.AgentRunID, wo
 	}
 	if run.Status != domain.AgentRunStatusRunning {
 		return workercontract.Assignment{}, fmt.Errorf("issue worker assignment: %w", ErrWorkerAssignmentConflict)
+	}
+	if (resultMode == workercontract.ResultModePlanningCandidate) != run.IsPlanning() {
+		return workercontract.Assignment{}, fmt.Errorf("issue worker assignment result mode: %w", ErrWorkerAssignmentConflict)
+	}
+	if run.IsPlanning() {
+		if beforeRevision != run.SourceRevision {
+			return workercontract.Assignment{}, fmt.Errorf("issue planning assignment revision: %w", ErrWorkerAssignmentConflict)
+		}
+		change, changeErr := readChange(ctx, tx, run.ChangeID)
+		if changeErr != nil {
+			return workercontract.Assignment{}, changeErr
+		}
+		current, currentErr := isCurrentPlanningRun(ctx, tx, change, run)
+		if currentErr != nil {
+			return workercontract.Assignment{}, currentErr
+		}
+		if change.Status != domain.ChangeStatusActive || !current {
+			return workercontract.Assignment{}, fmt.Errorf("issue planning assignment authority fence: %w", ErrWorkerAssignmentConflict)
+		}
 	}
 	var existingState string
 	err = tx.QueryRowContext(ctx, `SELECT state FROM t_worker_leases WHERE agent_run_id = ?`, runID).Scan(&existingState)
@@ -283,8 +493,11 @@ func (s *Store) IssueAssignment(ctx context.Context, runID domain.AgentRunID, wo
 	leaseID := id.New()
 	now := s.now().UTC()
 	expires := now.Add(workerLeaseTTL)
-	if _, err := tx.ExecContext(ctx, `INSERT INTO t_worker_leases (lease_id, agent_run_id, worker_id, attempt, token_sha256, state, expires_at, workspace_id, workspace_path, runtime, instruction, before_revision, input_artifacts_json, created_at) VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?)`, leaseID, run.ID, workerID, run.Attempt, hashSecret(token), stamp(expires), workspaceID, workspacePath, runtime, instruction, beforeRevision, string(inputJSON), stamp(now)); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO t_worker_leases (lease_id, agent_run_id, worker_id, attempt, token_sha256, state, expires_at, workspace_id, workspace_path, runtime, instruction, before_revision, input_artifacts_json, created_at, result_mode) VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?)`, leaseID, run.ID, workerID, run.Attempt, hashSecret(token), stamp(expires), workspaceID, workspacePath, runtime, instruction, beforeRevision, string(inputJSON), stamp(now), resultMode); err != nil {
 		return workercontract.Assignment{}, fmt.Errorf("persist worker lease: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE t_worker_instances SET last_heartbeat_at = NULL WHERE worker_id = ? AND status = 'registered'`, workerID); err != nil {
+		return workercontract.Assignment{}, fmt.Errorf("mark worker busy: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return workercontract.Assignment{}, fmt.Errorf("commit worker assignment: %w", err)
@@ -299,6 +512,7 @@ func (s *Store) IssueAssignment(ctx context.Context, runID domain.AgentRunID, wo
 		WorkspaceID:    workspaceID,
 		WorkspacePath:  workspacePath,
 		Runtime:        runtime,
+		ResultMode:     resultMode,
 		LeaseExpiresAt: stamp(expires),
 		Instruction:    instruction,
 		BeforeRevision: beforeRevision,
@@ -313,12 +527,15 @@ func (s *Store) PullAssignment(ctx context.Context, workerID string) (*workercon
 		return nil, ErrWorkerNotRegistered
 	}
 	now := s.now().UTC()
-	if _, err := s.db.ExecContext(ctx, `UPDATE t_worker_leases SET state = 'expired' WHERE worker_id = ? AND state = 'active' AND expires_at <= ?`, workerID, stamp(now)); err != nil {
+	if _, err := s.db.ExecContext(ctx, `UPDATE t_worker_leases SET state = 'expired', workspace_path = CASE WHEN result_mode = 'planning_candidate' THEN '' ELSE workspace_path END WHERE worker_id = ? AND state = 'active' AND expires_at <= ?`, workerID, stamp(now)); err != nil {
 		return nil, fmt.Errorf("expire worker leases: %w", ErrWorkerUnavailable)
 	}
-	var leaseID, agentRunID, state, expires, workspaceID, workspacePath, runtime, instruction, beforeRevision, inputJSON string
+	if err := s.forgetTerminalLeaseTokens(ctx); err != nil {
+		return nil, err
+	}
+	var leaseID, agentRunID, state, expires, workspaceID, workspacePath, runtime, resultMode, instruction, beforeRevision, inputJSON string
 	var attempt int
-	err := s.db.QueryRowContext(ctx, `SELECT lease_id, agent_run_id, state, expires_at, workspace_id, workspace_path, runtime, instruction, before_revision, attempt, input_artifacts_json FROM t_worker_leases WHERE worker_id = ? AND state = 'active' ORDER BY created_at, lease_id LIMIT 1`, workerID).Scan(&leaseID, &agentRunID, &state, &expires, &workspaceID, &workspacePath, &runtime, &instruction, &beforeRevision, &attempt, &inputJSON)
+	err := s.db.QueryRowContext(ctx, `SELECT lease_id, agent_run_id, state, expires_at, workspace_id, workspace_path, runtime, result_mode, instruction, before_revision, attempt, input_artifacts_json FROM t_worker_leases WHERE worker_id = ? AND state = 'active' ORDER BY created_at, lease_id LIMIT 1`, workerID).Scan(&leaseID, &agentRunID, &state, &expires, &workspaceID, &workspacePath, &runtime, &resultMode, &instruction, &beforeRevision, &attempt, &inputJSON)
 	if errors.Is(err, sqlErrNoRows()) {
 		return nil, nil
 	}
@@ -342,6 +559,7 @@ func (s *Store) PullAssignment(ctx context.Context, workerID string) (*workercon
 		WorkspaceID:    workspaceID,
 		WorkspacePath:  workspacePath,
 		Runtime:        runtime,
+		ResultMode:     resultMode,
 		Instruction:    instruction,
 		BeforeRevision: beforeRevision,
 		Attempt:        attempt,
@@ -396,7 +614,7 @@ func (s *Store) reportWorker(ctx context.Context, workerID string, request worke
 		}
 		committed = true
 		disposition := priorDisposition
-		if disposition == "accepted" || disposition == "accepted_fenced" {
+		if disposition == "accepted" || disposition == "accepted_fenced" || disposition == "candidate_received" || disposition == "late" {
 			disposition = "duplicate"
 		}
 		return workercontract.ReportResponse{Disposition: disposition, AgentRunID: priorAgentRun, RetrySameReport: false}, nil
@@ -419,25 +637,49 @@ func (s *Store) reportWorker(ctx context.Context, workerID string, request worke
 	if subtle.ConstantTimeCompare([]byte(lease.TokenSHA256), []byte(hashSecret(request.LeaseToken))) != 1 || lease.WorkerID == "" || (workerID != "" && lease.WorkerID != workerID) {
 		return workercontract.ReportResponse{}, ErrWorkerLeaseInvalid
 	}
+	planningCandidateMode := run.IsPlanning() && lease.ResultMode == workercontract.ResultModePlanningCandidate
+	if run.IsPlanning() != (lease.ResultMode == workercontract.ResultModePlanningCandidate) {
+		return workercontract.ReportResponse{}, ErrWorkerReportInvalid
+	}
+	if !planningCandidateMode && reportHasCaptureFailures(request) {
+		return workercontract.ReportResponse{}, fmt.Errorf("worker evidence capture failed: %w", ErrWorkerUnavailable)
+	}
 	if lease.State == "consumed" {
 		if lease.ReportDigest == digest {
 			if err := tx.Commit(); err != nil {
 				return workercontract.ReportResponse{}, fmt.Errorf("commit duplicate worker report: %w", ErrWorkerUnavailable)
 			}
 			committed = true
+			s.forgetLeaseToken(lease.LeaseID)
 			return workercontract.ReportResponse{Disposition: "duplicate", AgentRunID: request.AgentRunID, LeaseState: lease.State}, nil
 		}
+		if err := tx.Commit(); err != nil {
+			return workercontract.ReportResponse{}, fmt.Errorf("commit terminal worker report conflict: %w", ErrWorkerUnavailable)
+		}
+		committed = true
+		s.forgetLeaseToken(lease.LeaseID)
 		return workercontract.ReportResponse{Disposition: "terminal_conflict", ErrorCode: "terminal_conflict", AgentRunID: request.AgentRunID, LeaseState: lease.State}, nil
 	}
-	if run.Status != domain.AgentRunStatusRunning {
+	if lease.ReportDigest != "" {
+		if err := tx.Commit(); err != nil {
+			return workercontract.ReportResponse{}, fmt.Errorf("commit terminal worker report fence: %w", ErrWorkerUnavailable)
+		}
+		committed = true
+		s.forgetLeaseToken(lease.LeaseID)
+		if lease.ReportDigest == digest {
+			return workercontract.ReportResponse{Disposition: "duplicate", AgentRunID: request.AgentRunID, LeaseState: lease.State}, nil
+		}
 		return workercontract.ReportResponse{Disposition: "terminal_conflict", ErrorCode: "terminal_conflict", AgentRunID: request.AgentRunID, LeaseState: lease.State}, nil
 	}
 	now := s.now().UTC()
 	deadline, deadlineErr := parseStamp(lease.ExpiresAt)
 	attemptMatches := request.Attempt == 0 || request.Attempt == run.Attempt
-	current := lease.State == "active" && deadlineErr == nil && now.Before(deadline) && lease.Attempt == run.Attempt && attemptMatches
+	current := run.Status == domain.AgentRunStatusRunning && lease.State == "active" && deadlineErr == nil && now.Before(deadline) && lease.Attempt == run.Attempt && attemptMatches
 	if current {
 		currentRun, currentErr := isCurrentAgentRun(ctx, tx, change, run)
+		if planningCandidateMode {
+			currentRun, currentErr = isCurrentPlanningRun(ctx, tx, change, run)
+		}
 		if currentErr != nil {
 			return workercontract.ReportResponse{}, fmt.Errorf("check current worker run: %w", ErrWorkerUnavailable)
 		}
@@ -446,11 +688,33 @@ func (s *Store) reportWorker(ctx context.Context, workerID string, request worke
 		}
 	}
 	if !current {
-		if lease.State == "active" && (deadlineErr != nil || !now.Before(deadline)) {
-			if _, err := tx.ExecContext(ctx, `UPDATE t_worker_leases SET state = 'expired' WHERE lease_id = ? AND state = 'active'`, lease.LeaseID); err != nil {
-				return workercontract.ReportResponse{}, fmt.Errorf("expire worker lease: %w", ErrWorkerUnavailable)
+		if lease.State == "active" {
+			nextState := "revoked"
+			if deadlineErr != nil || !now.Before(deadline) {
+				nextState = "expired"
 			}
-			lease.State = "expired"
+			if _, err := tx.ExecContext(ctx, `UPDATE t_worker_leases SET state = ?, workspace_path = CASE WHEN result_mode = 'planning_candidate' THEN '' ELSE workspace_path END WHERE lease_id = ? AND state = 'active'`, nextState, lease.LeaseID); err != nil {
+				return workercontract.ReportResponse{}, fmt.Errorf("close non-current worker lease: %w", ErrWorkerUnavailable)
+			}
+			lease.State = nextState
+		}
+		if planningCandidateMode && run.Status == domain.AgentRunStatusRunning {
+			exists, candidateErr := planningCandidateExists(ctx, tx, run.ID)
+			if candidateErr != nil {
+				return workercontract.ReportResponse{}, candidateErr
+			}
+			if !exists {
+				response, candidateErr := s.persistPlanningCandidateReport(ctx, tx, request, digest, prepared, run, change, lease, artifacts, false)
+				if candidateErr != nil {
+					return workercontract.ReportResponse{}, candidateErr
+				}
+				if err := tx.Commit(); err != nil {
+					return workercontract.ReportResponse{}, fmt.Errorf("commit late planning candidate report: %w", ErrWorkerUnavailable)
+				}
+				committed = true
+				s.forgetLeaseToken(lease.LeaseID)
+				return response, nil
+			}
 		}
 		if err := storePreparedReportArtifacts(ctx, prepared, artifacts); err != nil {
 			return workercontract.ReportResponse{}, err
@@ -463,7 +727,23 @@ func (s *Store) reportWorker(ctx context.Context, workerID string, request worke
 			return workercontract.ReportResponse{}, fmt.Errorf("commit late worker report: %w", ErrWorkerUnavailable)
 		}
 		committed = true
+		s.forgetLeaseToken(lease.LeaseID)
 		return response, nil
+	}
+	if planningCandidateMode {
+		response, candidateErr := s.persistPlanningCandidateReport(ctx, tx, request, digest, prepared, run, change, lease, artifacts, true)
+		if candidateErr != nil {
+			return workercontract.ReportResponse{}, candidateErr
+		}
+		if err := tx.Commit(); err != nil {
+			return workercontract.ReportResponse{}, fmt.Errorf("commit planning candidate report: %w", ErrWorkerUnavailable)
+		}
+		committed = true
+		s.forgetLeaseToken(lease.LeaseID)
+		return response, nil
+	}
+	if containsPreparedWorkerArtifact(prepared, "candidate") {
+		return workercontract.ReportResponse{}, ErrWorkerReportInvalid
 	}
 	outcome := reportOutcome(request)
 	role := domain.ArtifactRoleOutput
@@ -530,10 +810,38 @@ func (s *Store) reportWorker(ctx context.Context, workerID string, request worke
 		return workercontract.ReportResponse{}, fmt.Errorf("commit worker report: %w", ErrWorkerUnavailable)
 	}
 	committed = true
+	s.forgetLeaseToken(lease.LeaseID)
 	return workercontract.ReportResponse{Disposition: disposition, AgentRunID: request.AgentRunID, LeaseState: "consumed"}, nil
 }
 
-// ReconcileWorkerRestart 撤销旧 Lease，并将仍 running 的 AgentRun 收敛为 daemon_restarted。
+// ReconcilePlanningExecutions 只把超时 Planning Lease 标记为失效，不据此推断 Runtime 已停止。
+// Worker 的 late Report、Supervisor 的进程退出或 Daemon restart 才能形成可收敛候选。
+func (s *Store) ReconcilePlanningExecutions(ctx context.Context) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin planning execution reconciliation: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+	now := s.now().UTC()
+	if _, err := tx.ExecContext(ctx, `UPDATE t_worker_leases SET state = 'expired', workspace_path = '' WHERE result_mode = 'planning_candidate' AND state = 'active' AND expires_at <= ?`, stamp(now)); err != nil {
+		return fmt.Errorf("expire planning leases: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit planning execution reconciliation: %w", err)
+	}
+	committed = true
+	if err := s.forgetTerminalLeaseTokens(ctx); err != nil {
+		return err
+	}
+	return nil
+}
+
+// ReconcileWorkerRestart 撤销旧 Lease；Planning run 先形成失败候选，其余 run 直接收敛。
 func (s *Store) ReconcileWorkerRestart(ctx context.Context) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -549,10 +857,19 @@ func (s *Store) ReconcileWorkerRestart(ctx context.Context) error {
 	if _, err := tx.ExecContext(ctx, `UPDATE t_worker_instances SET status = 'revoked' WHERE status IN ('pending', 'registered')`); err != nil {
 		return fmt.Errorf("revoke worker instances: %w", err)
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE t_worker_leases SET state = 'revoked' WHERE state = 'active'`); err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE t_worker_leases SET state = 'revoked', workspace_path = CASE WHEN result_mode = 'planning_candidate' THEN '' ELSE workspace_path END WHERE state = 'active'`); err != nil {
 		return fmt.Errorf("revoke worker leases: %w", err)
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT agent_run_id FROM t_agent_runs WHERE status = 'running' ORDER BY started_at, agent_run_id`)
+	planningRunIDs, err := runningPlanningRunIDs(ctx, tx, "", true)
+	if err != nil {
+		return err
+	}
+	for _, runID := range planningRunIDs {
+		if err := insertPlanningSystemCandidate(ctx, tx, runID, "daemon_restarted", now); err != nil {
+			return err
+		}
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT run.agent_run_id FROM t_agent_runs run WHERE run.status = 'running' AND run.run_kind <> 'planning' ORDER BY run.started_at, run.agent_run_id`)
 	if err != nil {
 		return fmt.Errorf("list running worker runs: %w", err)
 	}
@@ -605,10 +922,13 @@ func (s *Store) ReconcileWorkerRestart(ctx context.Context) error {
 		return fmt.Errorf("commit worker restart reconciliation: %w", err)
 	}
 	committed = true
+	if err := s.forgetTerminalLeaseTokens(ctx); err != nil {
+		return err
+	}
 	return nil
 }
 
-// ReconcileWorkerLost 撤销单个崩溃 Worker 的 Lease，并固定其仍 running 的 AgentRun。
+// ReconcileWorkerLost 撤销单个崩溃 Worker 的 Lease，并按 run kind 收敛其 running AgentRun。
 func (s *Store) ReconcileWorkerLost(ctx context.Context, workerID string) error {
 	if strings.TrimSpace(workerID) == "" {
 		return ErrWorkerNotRegistered
@@ -627,10 +947,19 @@ func (s *Store) ReconcileWorkerLost(ctx context.Context, workerID string) error 
 	if _, err := tx.ExecContext(ctx, `UPDATE t_worker_instances SET status = 'revoked' WHERE worker_id = ? AND status IN ('pending', 'registered')`, workerID); err != nil {
 		return fmt.Errorf("revoke lost worker: %w", err)
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE t_worker_leases SET state = 'revoked' WHERE worker_id = ? AND state = 'active'`, workerID); err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE t_worker_leases SET state = 'revoked', workspace_path = CASE WHEN result_mode = 'planning_candidate' THEN '' ELSE workspace_path END WHERE worker_id = ? AND state = 'active'`, workerID); err != nil {
 		return fmt.Errorf("revoke lost worker leases: %w", err)
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT agent_run_id FROM t_worker_leases WHERE worker_id = ? AND state = 'revoked' AND report_digest IS NULL`, workerID)
+	planningRunIDs, err := runningPlanningRunIDs(ctx, tx, workerID, false)
+	if err != nil {
+		return err
+	}
+	for _, runID := range planningRunIDs {
+		if err := insertPlanningSystemCandidate(ctx, tx, runID, "worker_lost", now); err != nil {
+			return err
+		}
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT lease.agent_run_id FROM t_worker_leases lease JOIN t_agent_runs run ON run.agent_run_id = lease.agent_run_id WHERE lease.worker_id = ? AND lease.state IN ('expired', 'revoked') AND run.status = 'running' AND run.run_kind <> 'planning'`, workerID)
 	if err != nil {
 		return fmt.Errorf("list lost worker runs: %w", err)
 	}
@@ -686,7 +1015,117 @@ func (s *Store) ReconcileWorkerLost(ctx context.Context, workerID string) error 
 		return fmt.Errorf("commit worker lost reconciliation: %w", err)
 	}
 	committed = true
+	if err := s.forgetTerminalLeaseTokens(ctx); err != nil {
+		return err
+	}
 	return nil
+}
+
+func runningPlanningRunIDs(ctx context.Context, tx *sql.Tx, workerID string, includeUnassigned bool) ([]domain.AgentRunID, error) {
+	query := `
+SELECT run.agent_run_id
+FROM t_agent_runs run
+JOIN t_worker_leases lease ON lease.agent_run_id = run.agent_run_id
+WHERE run.run_kind = 'planning'
+	  AND run.status = 'running'
+	  AND lease.result_mode = 'planning_candidate'
+	  AND lease.state IN ('expired', 'revoked')
+	  AND lease.report_digest IS NULL
+	  AND NOT EXISTS (
+      SELECT 1 FROM t_planning_run_candidates candidate
+      WHERE candidate.agent_run_id = run.agent_run_id
+  )
+ORDER BY run.started_at, run.agent_run_id`
+	var rows *sql.Rows
+	var err error
+	if includeUnassigned {
+		rows, err = tx.QueryContext(ctx, query)
+	} else {
+		query = `
+SELECT run.agent_run_id
+FROM t_agent_runs run
+JOIN t_worker_leases lease ON lease.agent_run_id = run.agent_run_id
+WHERE run.run_kind = 'planning'
+  AND run.status = 'running'
+  AND lease.worker_id = ?
+  AND lease.state IN ('expired', 'revoked')
+  AND lease.report_digest IS NULL
+  AND NOT EXISTS (
+      SELECT 1 FROM t_planning_run_candidates candidate
+      WHERE candidate.agent_run_id = run.agent_run_id
+  )
+ORDER BY run.started_at, run.agent_run_id`
+		rows, err = tx.QueryContext(ctx, query, workerID)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("list running planning executions: %w", err)
+	}
+	defer rows.Close()
+	var runIDs []domain.AgentRunID
+	for rows.Next() {
+		var runID domain.AgentRunID
+		if err := rows.Scan(&runID); err != nil {
+			return nil, fmt.Errorf("scan running planning execution: %w", err)
+		}
+		runIDs = append(runIDs, runID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read running planning executions: %w", err)
+	}
+	return runIDs, nil
+}
+
+func insertPlanningSystemCandidate(ctx context.Context, tx *sql.Tx, runID domain.AgentRunID, reason string, now time.Time) error {
+	if !validPlanningFailureReason(reason) {
+		return fmt.Errorf("planning execution failure reason is invalid: %w", domain.ErrInvalidRequest)
+	}
+	digestInput := "planning-system-candidate:v1:" + reason + ":" + string(runID)
+	digest := sha256.Sum256([]byte(digestInput))
+	result, err := tx.ExecContext(ctx, `
+INSERT INTO t_planning_run_candidates (
+    agent_run_id, report_digest, outcome, exit_code, after_revision,
+    failure_reason, guard_findings_json, candidate_truncated, received_at
+)
+SELECT run.agent_run_id, ?, 'failed', NULL, run.source_revision, ?, '[]', 0, ?
+FROM t_agent_runs run
+WHERE run.agent_run_id = ?
+  AND run.run_kind = 'planning'
+  AND run.status = 'running'
+  AND NOT EXISTS (
+      SELECT 1 FROM t_planning_run_candidates candidate
+      WHERE candidate.agent_run_id = run.agent_run_id
+  )`, hex.EncodeToString(digest[:]), reason, stamp(now), runID)
+	if err != nil {
+		return fmt.Errorf("record planning execution failure: %w", err)
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("record planning execution failure: %w", err)
+	}
+	if count == 1 {
+		return nil
+	}
+	exists, err := planningCandidateExists(ctx, tx, runID)
+	if err != nil {
+		return err
+	}
+	if exists {
+		return nil
+	}
+	return domain.ErrPlanningRunConflict
+}
+
+func validPlanningFailureReason(reason string) bool {
+	switch reason {
+	case "agent_run_mismatch", "artifact_unavailable", "authority_fenced", "capture_failed",
+		"change_cancelled", "coordination_failed", "daemon_restarted", "decode_invalid",
+		"dispatch_failed", "guard_violation", "input_invalid", "lease_expired", "lease_revoked",
+		"limit_exceeded", "revision_mismatch", "runtime_failed", "runtime_timeout",
+		"schema_invalid", "snapshot_failed", "worker_lost":
+		return true
+	default:
+		return false
+	}
 }
 
 type workerLease struct {
@@ -699,11 +1138,12 @@ type workerLease struct {
 	ExpiresAt     string
 	ReportDigest  string
 	ReportOutcome string
+	ResultMode    string
 }
 
 func readWorkerLease(ctx context.Context, queryer sqlQueryer, runID string) (workerLease, error) {
 	var lease workerLease
-	err := queryer.QueryRowContext(ctx, `SELECT lease_id, agent_run_id, worker_id, attempt, token_sha256, state, expires_at, COALESCE(report_digest, ''), COALESCE(report_outcome, '') FROM t_worker_leases WHERE agent_run_id = ?`, runID).Scan(&lease.LeaseID, &lease.AgentRunID, &lease.WorkerID, &lease.Attempt, &lease.TokenSHA256, &lease.State, &lease.ExpiresAt, &lease.ReportDigest, &lease.ReportOutcome)
+	err := queryer.QueryRowContext(ctx, `SELECT lease_id, agent_run_id, worker_id, attempt, token_sha256, state, expires_at, COALESCE(report_digest, ''), COALESCE(report_outcome, ''), result_mode FROM t_worker_leases WHERE agent_run_id = ?`, runID).Scan(&lease.LeaseID, &lease.AgentRunID, &lease.WorkerID, &lease.Attempt, &lease.TokenSHA256, &lease.State, &lease.ExpiresAt, &lease.ReportDigest, &lease.ReportOutcome, &lease.ResultMode)
 	if errors.Is(err, sqlErrNoRows()) {
 		return workerLease{}, ErrWorkerLeaseInvalid
 	}
@@ -720,9 +1160,6 @@ type preparedWorkerArtifact struct {
 }
 
 func prepareReportArtifacts(request workercontract.Report) ([]preparedWorkerArtifact, error) {
-	if len(request.CaptureFailures) > 0 {
-		return nil, fmt.Errorf("worker evidence capture failed: %w", ErrWorkerUnavailable)
-	}
 	prepared := make([]preparedWorkerArtifact, 0, len(request.Artifacts))
 	total := 0
 	seen := make(map[string]struct{}, len(request.Artifacts))
@@ -730,34 +1167,51 @@ func prepareReportArtifacts(request workercontract.Report) ([]preparedWorkerArti
 		limit := maxWorkerArtifactBytes
 		if item.Kind == "changed_files" {
 			limit = maxChangedFilesBytes
+		} else if item.Kind == "candidate" {
+			limit = maxPlanningCandidateBytes
 		}
 		if _, ok := seen[item.Kind]; ok || !validWorkerArtifactKind(item.Kind) {
-			return nil, fmt.Errorf("worker artifact kind is invalid: %w", ErrWorkerUnavailable)
+			return nil, fmt.Errorf("worker artifact kind is invalid: %w", ErrWorkerReportInvalid)
 		}
 		seen[item.Kind] = struct{}{}
 		if item.CaptureError != "" {
-			return nil, fmt.Errorf("worker artifact capture failed: %w", ErrWorkerUnavailable)
+			if len(item.CaptureError) > 8<<10 || !utf8.ValidString(item.CaptureError) {
+				return nil, fmt.Errorf("worker artifact capture error is invalid: %w", ErrWorkerReportInvalid)
+			}
+			continue
 		}
 		content, err := base64.StdEncoding.DecodeString(item.ContentBase64)
 		if err != nil || int64(len(content)) != item.SizeBytes || item.SizeBytes < 0 || len(content) > limit {
-			return nil, fmt.Errorf("worker artifact size or encoding is invalid: %w", ErrWorkerUnavailable)
+			return nil, fmt.Errorf("worker artifact size or encoding is invalid: %w", ErrWorkerReportInvalid)
 		}
 		identity := domain.NewArtifactIdentity(content)
 		if identity.SHA256 != item.SHA256 {
-			return nil, fmt.Errorf("worker artifact digest is invalid: %w", ErrWorkerUnavailable)
+			return nil, fmt.Errorf("worker artifact digest is invalid: %w", ErrWorkerReportInvalid)
 		}
 		if item.Kind == "changed_files" {
 			if err := validateChangedFiles(content); err != nil {
-				return nil, fmt.Errorf("worker changed files are invalid: %w", ErrWorkerUnavailable)
+				return nil, fmt.Errorf("worker changed files are invalid: %w", ErrWorkerReportInvalid)
 			}
 		}
 		total += len(content)
 		if total > maxWorkerReportBytes {
-			return nil, fmt.Errorf("worker report exceeds total artifact limit: %w", ErrWorkerUnavailable)
+			return nil, fmt.Errorf("worker report exceeds total artifact limit: %w", ErrWorkerReportInvalid)
 		}
 		prepared = append(prepared, preparedWorkerArtifact{request: item, content: content, identity: identity})
 	}
 	return prepared, nil
+}
+
+func reportHasCaptureFailures(request workercontract.Report) bool {
+	if len(request.CaptureFailures) != 0 {
+		return true
+	}
+	for _, artifact := range request.Artifacts {
+		if artifact.CaptureError != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func storePreparedReportArtifacts(ctx context.Context, prepared []preparedWorkerArtifact, store WorkerArtifactStore) error {
@@ -785,11 +1239,16 @@ func validateChangedFiles(content []byte) error {
 	if !sort.StringsAreSorted(paths) {
 		return errors.New("changed files are not sorted")
 	}
-	for index, path := range paths {
-		if path == "" || strings.ContainsRune(path, '\x00') || strings.Contains(path, "\\") || filepath.IsAbs(path) || filepath.Clean(path) != path || path == "." || strings.HasPrefix(path, "../") || path == ".." {
+	for index, filePath := range paths {
+		if filePath == "" || strings.ContainsRune(filePath, '\x00') || strings.Contains(filePath, "\\") || strings.Contains(filePath, ":") || pathpkg.IsAbs(filePath) || filepath.IsAbs(filePath) || filepath.Clean(filePath) != filePath || pathpkg.Clean(filePath) != filePath || filePath == "." || filePath == ".." || strings.HasPrefix(filePath, "../") || strings.Contains(filePath, "/../") {
 			return errors.New("changed files contain a non-workspace-relative path")
 		}
-		if index > 0 && paths[index-1] == path {
+		for _, component := range strings.Split(filePath, "/") {
+			if component == "" || component == "." || component == ".." {
+				return errors.New("changed files contain a non-workspace-relative path")
+			}
+		}
+		if index > 0 && paths[index-1] == filePath {
 			return errors.New("changed files contain duplicates")
 		}
 	}
@@ -798,11 +1257,20 @@ func validateChangedFiles(content []byte) error {
 
 func validWorkerArtifactKind(kind string) bool {
 	switch kind {
-	case "stdout", "stderr", "diff", "changed_files":
+	case "stdout", "stderr", "diff", "changed_files", "candidate":
 		return true
 	default:
 		return false
 	}
+}
+
+func containsPreparedWorkerArtifact(artifacts []preparedWorkerArtifact, kind string) bool {
+	for _, artifact := range artifacts {
+		if artifact.request.Kind == kind {
+			return true
+		}
+	}
+	return false
 }
 
 func containsWorkerCapability(capabilities []string, required string) bool {
@@ -841,6 +1309,9 @@ func insertWorkerArtifacts(ctx context.Context, tx *sql.Tx, change domain.Change
 }
 
 func mediaTypeForWorkerArtifact(kind string) string {
+	if kind == "candidate" {
+		return "application/json; charset=utf-8"
+	}
 	if kind == "diff" {
 		return "text/x-diff; charset=utf-8"
 	}
@@ -852,6 +1323,14 @@ func mediaTypeForWorkerArtifact(kind string) string {
 
 func (s *Store) persistLateReport(ctx context.Context, tx *sql.Tx, request workercontract.Report, digest string, prepared []preparedWorkerArtifact, run domain.AgentRun, change domain.Change, lease workerLease, reason string) (workercontract.ReportResponse, error) {
 	now := s.now().UTC()
+	result, err := tx.ExecContext(ctx, `UPDATE t_worker_leases SET consumed_at = ?, report_digest = ?, report_disposition = 'late', report_outcome = ?, workspace_path = '' WHERE lease_id = ? AND state IN ('expired', 'revoked') AND report_digest IS NULL`, stamp(now), digest, reportOutcome(request), lease.LeaseID)
+	if err != nil {
+		return workercontract.ReportResponse{}, fmt.Errorf("claim late worker report: %w", ErrWorkerUnavailable)
+	}
+	count, err := result.RowsAffected()
+	if err != nil || count != 1 {
+		return workercontract.ReportResponse{}, fmt.Errorf("claim late worker report: %w", ErrWorkerUnavailable)
+	}
 	role := domain.ArtifactRoleOutput
 	if reportOutcome(request) != domain.AgentRunOutcomeSucceeded {
 		role = domain.ArtifactRoleFailure
@@ -907,10 +1386,11 @@ func digestReport(report workercontract.Report) (string, error) {
 }
 
 func reportOutcome(report workercontract.Report) string {
-	if report.ExitCode != nil {
-		if *report.ExitCode == 0 {
-			return domain.AgentRunOutcomeSucceeded
-		}
+	if report.Outcome == workercontract.Outcome(domain.AgentRunOutcomeFailed) ||
+		strings.TrimSpace(report.FailureReason) != "" || len(report.GuardFindings) != 0 || reportHasCaptureFailures(report) {
+		return domain.AgentRunOutcomeFailed
+	}
+	if report.ExitCode != nil && *report.ExitCode != 0 {
 		return domain.AgentRunOutcomeFailed
 	}
 	if report.Outcome == workercontract.Outcome(domain.AgentRunOutcomeSucceeded) {
@@ -922,6 +1402,37 @@ func reportOutcome(report workercontract.Report) string {
 func hashSecret(secret string) string {
 	digest := sha256.Sum256([]byte(secret))
 	return hex.EncodeToString(digest[:])
+}
+
+func (s *Store) forgetLeaseToken(leaseID string) {
+	s.leaseMu.Lock()
+	delete(s.leaseTokens, leaseID)
+	s.leaseMu.Unlock()
+}
+
+func (s *Store) forgetTerminalLeaseTokens(ctx context.Context) error {
+	rows, err := s.db.QueryContext(ctx, `SELECT lease_id FROM t_worker_leases WHERE state <> 'active'`)
+	if err != nil {
+		return fmt.Errorf("list terminal worker lease secrets: %w", ErrWorkerUnavailable)
+	}
+	defer rows.Close()
+	var leaseIDs []string
+	for rows.Next() {
+		var leaseID string
+		if err := rows.Scan(&leaseID); err != nil {
+			return fmt.Errorf("scan terminal worker lease secret: %w", ErrWorkerUnavailable)
+		}
+		leaseIDs = append(leaseIDs, leaseID)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("read terminal worker lease secrets: %w", ErrWorkerUnavailable)
+	}
+	s.leaseMu.Lock()
+	for _, leaseID := range leaseIDs {
+		delete(s.leaseTokens, leaseID)
+	}
+	s.leaseMu.Unlock()
+	return nil
 }
 
 // sqlErrNoRows 隔离 database/sql 的查询缺失哨兵，避免 DTO 层感知 SQL 细节。

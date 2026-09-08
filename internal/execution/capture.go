@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"fmt"
 	"os"
+	"path"
 	"sort"
 	"strings"
+	"unicode"
 )
 
 type boundedBuffer struct {
@@ -45,12 +47,9 @@ func NormalizeChangedFiles(files []string) ([]string, error) {
 	seen := make(map[string]struct{}, len(files))
 	normalized := make([]string, 0, len(files))
 	for _, file := range files {
-		file = strings.TrimSpace(strings.ReplaceAll(file, "\\", "/"))
-		if file == "" || strings.HasPrefix(file, "/") || file == "." || strings.HasPrefix(file, "../") || strings.Contains(file, "/../") {
-			return nil, fmt.Errorf("normalize changed files: path %q is not workspace-relative", file)
-		}
+		file = strings.ReplaceAll(file, "\\", "/")
 		file = strings.TrimPrefix(file, "./")
-		if file == "" || strings.HasPrefix(file, "../") {
+		if !validChangedFilePath(file) {
 			return nil, fmt.Errorf("normalize changed files: path %q is not workspace-relative", file)
 		}
 		if _, ok := seen[file]; ok {
@@ -61,6 +60,23 @@ func NormalizeChangedFiles(files []string) ([]string, error) {
 	}
 	sort.Strings(normalized)
 	return normalized, nil
+}
+
+func validChangedFilePath(file string) bool {
+	if file == "" || file == "." || file == ".." || path.IsAbs(file) || path.Clean(file) != file || strings.ContainsAny(file, ":\x00") {
+		return false
+	}
+	for _, character := range file {
+		if unicode.IsControl(character) {
+			return false
+		}
+	}
+	for _, component := range strings.Split(file, "/") {
+		if component == "" || component == "." || component == ".." {
+			return false
+		}
+	}
+	return true
 }
 
 func changedFilesContent(files []string, limit int64) Artifact {
@@ -85,6 +101,8 @@ func artifactLimit(kind ArtifactKind, limits Limits) int64 {
 		return limits.DiffBytes
 	case ArtifactChangedFiles:
 		return limits.ChangedFilesBytes
+	case ArtifactCandidate:
+		return limits.CandidateBytes
 	default:
 		return 0
 	}
@@ -94,7 +112,13 @@ func enforceTotalLimit(result *RuntimeResult, limits Limits) {
 	if limits.TotalBytes <= 0 {
 		return
 	}
-	artifacts := []*Artifact{&result.Stdout, &result.Stderr, &result.Diff, &result.ChangedFiles}
+	artifacts := make([]*Artifact, 0, 5)
+	// Planning 的结构化 candidate 是阶段校验的唯一输入，先为它保留预算；
+	// stdout/stderr/diff/changed_files 仍按既有顺序消费剩余证据预算。
+	if result.Candidate.Kind == ArtifactCandidate {
+		artifacts = append(artifacts, &result.Candidate)
+	}
+	artifacts = append(artifacts, &result.Stdout, &result.Stderr, &result.Diff, &result.ChangedFiles)
 	var total int64
 	for _, artifact := range artifacts {
 		if total+artifact.SizeBytes <= limits.TotalBytes {

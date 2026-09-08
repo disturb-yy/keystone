@@ -17,13 +17,16 @@ import (
 type WorkerProtocolHandler struct {
 	Authority *workstore.Store
 	Artifacts workstore.WorkerArtifactStore
+	Wake      func()
 }
 
 func (s *Server) handleWorkerRoute(w http.ResponseWriter, r *http.Request) {
 	s.mu.RLock()
 	authority, artifacts := s.workerStore, s.artifacts
 	s.mu.RUnlock()
-	NewWorkerProtocolHandler(authority, artifacts).ServeHTTP(w, r)
+	handler := NewWorkerProtocolHandler(authority, artifacts)
+	handler.Wake = s.wakePlanning
+	handler.ServeHTTP(w, r)
 }
 
 // NewWorkerProtocolHandler 创建 Worker Protocol Handler。
@@ -71,6 +74,7 @@ func (h *WorkerProtocolHandler) handleRegister(w http.ResponseWriter, r *http.Re
 		writeWorkerAuthorityError(w, err)
 		return
 	}
+	h.wakePlanning()
 	writeWorkerJSON(w, http.StatusOK, response)
 }
 
@@ -93,6 +97,9 @@ func (h *WorkerProtocolHandler) handleHeartbeat(w http.ResponseWriter, r *http.R
 	if err != nil {
 		writeWorkerAuthorityError(w, err)
 		return
+	}
+	if request.AgentRunID == "" {
+		h.wakePlanning()
 	}
 	writeWorkerJSON(w, http.StatusOK, response)
 }
@@ -149,7 +156,16 @@ func (h *WorkerProtocolHandler) handleReport(w http.ResponseWriter, r *http.Requ
 	if response.Disposition == "terminal_conflict" {
 		status = http.StatusConflict
 	}
+	if response.Disposition == "candidate_received" || response.Disposition == "late" || response.Disposition == "duplicate" {
+		h.wakePlanning()
+	}
 	writeWorkerJSON(w, status, response)
+}
+
+func (h *WorkerProtocolHandler) wakePlanning() {
+	if h != nil && h.Wake != nil {
+		h.Wake()
+	}
 }
 
 func decodeWorkerRequest(r *http.Request, destination any) error {

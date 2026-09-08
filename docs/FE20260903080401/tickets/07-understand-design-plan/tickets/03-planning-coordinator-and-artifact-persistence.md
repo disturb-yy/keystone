@@ -4,7 +4,7 @@
 
 **Blocked by：** 07-01、07-02、顶层 Ticket 06；必须以 Ticket 05 已验证的 Change/AgentRun/Event/fencing 能力为基础。
 
-**Status：** ready-for-agent（仅文档成熟度）
+**Status：** implemented
 
 ## Coordinator rules
 

@@ -8,6 +8,7 @@
 
 - DTO 中的标识是传输标识，不复用或导出 Domain Entity。
 - `Report.Outcome` 是不透明、可扩展的字符串传输值；本包不解释其具体值，也不定义生命周期状态机。
+- `Assignment.ResultMode` 只声明候选结果采集模式；candidate Artifact 仍须由 Daemon/Coordinator 验证。
 - `DecodeStrict` 只接受有界单一 JSON object，拒绝未知字段、重复 key 和多个顶层值；它不执行 HTTP 或鉴权。
 - 本包不处理 HTTP、Daemon、Worker 监管、Runtime 调用、租约校验、Report 幂等、Artifact 落盘、SQLite 或状态推进。
 - 本包只使用 Go 标准库中的 JSON 标签约定，不引入第三方依赖或其他 Keystone package。

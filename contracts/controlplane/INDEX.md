@@ -8,8 +8,8 @@ SQLite 行为；这些行为由 `internal/daemon` 负责。
 
 ## 文件
 
-- `contract.go`：版本前缀、错误 envelope、健康响应、Daemon status/stop、Project Init/Query/Event Query、Change/Trace DTO 和幂等键类型。
-- `contract_test.go`：Health、Daemon status/stop、错误 envelope、幂等键的 JSON round-trip 和字段约束测试。
+- `contract.go`：版本前缀、错误 envelope、健康响应、Daemon status/stop、Project Init/Query/Event Query、Change/Trace DTO、Planning Artifact/AgentRun 只读元数据和幂等键类型。
+- `contract_test.go`：Health、Daemon status/stop、错误 envelope、Planning metadata 向后兼容、幂等键的 JSON round-trip 和字段约束测试。
 - `AGENTS.md`：本 package 的职责、依赖和验证规约。
 
 ## 当前 DTO
@@ -28,8 +28,8 @@ SQLite 行为；这些行为由 `internal/daemon` 负责。
 | `ChangeCreateRequest` / `ChangeCreateResponse` | `POST /v1/changes` 的创建边界 |
 | `ChangeListResponse` / `ChangeCommandResponse` | Change 列表、快照和 Pause/Resume/Cancel 成功响应 |
 | `HumanDecisionRequest` / `HumanDecisionResponse` | retry/cancel 人工恢复决定 |
-| `ChangeEventsResponse` / `ChangeRunsResponse` | Event 和 AgentRun Trace |
-| `ChangeArtifactsResponse` / `ChangeDecisionsResponse` | ArtifactRef 和 HumanDecision Trace |
+| `ChangeEventsResponse` / `ChangeRunsResponse` | Event 和 AgentRun Trace；AgentRun 可选返回 run kind 与固定 source revision |
+| `ChangeArtifactsResponse` / `ChangeDecisionsResponse` | ArtifactRef 和 HumanDecision Trace；ArtifactRef 可选返回 Planning kind、schema、summary、source revision 与输入/raw-log 关联 |
 
 ## 关系
 

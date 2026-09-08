@@ -39,4 +39,10 @@ var (
 	ErrHumanDecisionRequired = errors.New("human decision is required")
 	// ErrUnavailable 表示本机依赖暂时不可用。
 	ErrUnavailable = errors.New("operation is temporarily unavailable")
+	// ErrPlanningRunConflict 表示 Planning stage、attempt、revision 或终态围栏冲突。
+	ErrPlanningRunConflict = errors.New("planning agent run conflicts with current authority")
+	// ErrPlanningRunDeferred 表示 Pause 或并发版本变化要求保留 running candidate 后重评估。
+	ErrPlanningRunDeferred = errors.New("planning agent run completion is deferred")
+	// ErrPlanningCandidateNotFound 表示 AgentRun 尚无可供 Coordinator 验证的耐久候选。
+	ErrPlanningCandidateNotFound = errors.New("planning candidate not found")
 )

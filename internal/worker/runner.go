@@ -1,12 +1,16 @@
 package worker
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -18,25 +22,34 @@ const (
 	defaultPollInterval     = time.Second
 	defaultHeartbeatSeconds = 5 * time.Second
 	defaultRuntimeTimeout   = 30 * time.Minute
+	defaultRuntimeStopTime  = 2 * time.Second
 )
+
+var errWorkerLeaseNotRenewed = errors.New("worker lease was not renewed")
 
 // RunnerConfig 描述一个独立 Worker 的主动循环和可替换 seam。
 type RunnerConfig struct {
-	Client            *Client
-	WorkerID          string
-	Capabilities      []string
-	Runtimes          map[string]execution.RuntimeAdapter
-	PollInterval      time.Duration
-	HeartbeatInterval time.Duration
-	RuntimeTimeout    time.Duration
-	Environment       func() []string
-	Now               func() time.Time
-	Sleep             func(context.Context, time.Duration) error
+	Client             *Client
+	WorkerID           string
+	Capabilities       []string
+	Runtimes           map[string]execution.RuntimeAdapter
+	PollInterval       time.Duration
+	HeartbeatInterval  time.Duration
+	RuntimeTimeout     time.Duration
+	RuntimeStopTimeout time.Duration
+	Environment        func() []string
+	Now                func() time.Time
+	Sleep              func(context.Context, time.Duration) error
 }
 
 // Runner 执行 Register → Heartbeat/Pull → Runtime → Report 顺序。
 type Runner struct {
 	config RunnerConfig
+}
+
+type runtimeStopResult struct {
+	value execution.RuntimeResult
+	err   error
 }
 
 // NewRunner 创建一个不拥有外部资源的 Worker Runner。
@@ -52,6 +65,9 @@ func NewRunner(config RunnerConfig) (*Runner, error) {
 	}
 	if config.RuntimeTimeout <= 0 {
 		config.RuntimeTimeout = defaultRuntimeTimeout
+	}
+	if config.RuntimeStopTimeout <= 0 {
+		config.RuntimeStopTimeout = defaultRuntimeStopTime
 	}
 	if config.Now == nil {
 		config.Now = time.Now
@@ -103,7 +119,7 @@ func (r *Runner) executeAssignment(ctx context.Context, assignment workercontrac
 		report := workercontract.Report{AgentRunID: assignment.AgentRunID, LeaseToken: assignment.LeaseToken, Attempt: assignment.Attempt, Outcome: workercontract.Outcome("failed"), FailureReason: "runtime_unavailable", StartedAt: r.now().Format(time.RFC3339Nano), CompletedAt: r.now().Format(time.RFC3339Nano)}
 		return r.reportWithRetry(ctx, report)
 	}
-	input := execution.ExecutionInput{Workspace: assignment.WorkspacePath, Instruction: assignment.Instruction, Runtime: assignment.Runtime, BeforeRevision: assignment.BeforeRevision, Timeout: r.config.RuntimeTimeout}
+	input := execution.ExecutionInput{Workspace: assignment.WorkspacePath, Instruction: assignment.Instruction, Runtime: assignment.Runtime, BeforeRevision: assignment.BeforeRevision, Timeout: r.config.RuntimeTimeout, ResultMode: assignment.ResultMode}
 	if r.config.Environment != nil {
 		input.Environment = execution.SanitizeEnvironment(r.config.Environment())
 	}
@@ -112,21 +128,119 @@ func (r *Runner) executeAssignment(ctx context.Context, assignment workercontrac
 	result, runErr = r.runWithHeartbeat(ctx, assignment, func(runContext context.Context) (execution.RuntimeResult, error) {
 		return adapter.Run(runContext, input)
 	})
+	if assignment.ResultMode == workercontract.ResultModePlanningCandidate {
+		result = enforcePlanningSnapshotUnchanged(result)
+		result = redactPlanningSnapshotPath(result, assignment.WorkspacePath)
+	}
 	report := ReportFromRuntime(assignment, result, runErr, r.now())
 	return r.reportWithRetry(ctx, report)
 }
 
-func (r *Runner) runWithHeartbeat(ctx context.Context, assignment workercontract.Assignment, run func(context.Context) (execution.RuntimeResult, error)) (execution.RuntimeResult, error) {
-	type result struct {
-		value execution.RuntimeResult
-		err   error
+func enforcePlanningSnapshotUnchanged(result execution.RuntimeResult) execution.RuntimeResult {
+	modified := len(result.ChangedFileList) != 0 || len(result.Diff.Content) != 0 || len(result.ChangedFiles.Content) != 0
+	if modified && !containsString(result.GuardFindings, "planning_snapshot_modified") {
+		result.GuardFindings = append(result.GuardFindings, "planning_snapshot_modified")
 	}
-	resultCh := make(chan result, 1)
+	return result
+}
+
+func redactPlanningSnapshotPath(result execution.RuntimeResult, workspace string) execution.RuntimeResult {
+	variants := snapshotPathVariants(workspace)
+	if len(variants) == 0 {
+		return result
+	}
+	disclosed := false
+	for _, artifact := range []*execution.Artifact{&result.Stdout, &result.Stderr, &result.Diff, &result.ChangedFiles, &result.Candidate} {
+		content, found := redactSnapshotPath(artifact.Content, variants)
+		if !found {
+			continue
+		}
+		disclosed = true
+		captureErr := error(nil)
+		if artifact.CaptureError != "" {
+			captureErr = errors.New("capture failed")
+		}
+		*artifact = execution.NewArtifact(artifact.Kind, content, artifact.Truncated, captureErr)
+	}
+	for index, finding := range result.GuardFindings {
+		redacted, found := redactSnapshotPath([]byte(finding), variants)
+		if found {
+			disclosed = true
+			result.GuardFindings[index] = string(redacted)
+		}
+	}
+	if disclosed && !containsString(result.GuardFindings, "snapshot_path_disclosure") {
+		result.GuardFindings = append(result.GuardFindings, "snapshot_path_disclosure")
+	}
+	return result
+}
+
+func snapshotPathVariants(workspace string) [][]byte {
+	clean := filepath.Clean(workspace)
+	if clean == "." || !filepath.IsAbs(clean) || len(clean) < 2 {
+		return nil
+	}
+	paths := []string{clean}
+	parent := filepath.Dir(clean)
+	if filepath.Base(clean) == "source" && strings.HasPrefix(filepath.Base(parent), "keystone-planning-snapshot-") {
+		paths = append(paths, parent, filepath.Dir(parent))
+	}
+	values := make([]string, 0, len(paths)*4)
+	for _, snapshotPath := range paths {
+		pathValues := []string{snapshotPath, filepath.ToSlash(snapshotPath), strings.ReplaceAll(snapshotPath, "/", `\`)}
+		values = append(values, pathValues...)
+		for _, value := range pathValues {
+			encoded, err := json.Marshal(value)
+			if err == nil && len(encoded) >= 2 {
+				values = append(values, string(encoded[1:len(encoded)-1]))
+			}
+		}
+	}
+	seen := make(map[string]struct{}, len(values))
+	variants := make([][]byte, 0, len(values))
+	for _, value := range values {
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		variants = append(variants, []byte(value))
+	}
+	sort.Slice(variants, func(left, right int) bool { return len(variants[left]) > len(variants[right]) })
+	return variants
+}
+
+func redactSnapshotPath(content []byte, variants [][]byte) ([]byte, bool) {
+	redacted := append([]byte(nil), content...)
+	found := false
+	for _, variant := range variants {
+		if !bytes.Contains(redacted, variant) {
+			continue
+		}
+		found = true
+		redacted = bytes.ReplaceAll(redacted, variant, []byte("<snapshot>"))
+	}
+	return redacted, found
+}
+
+func containsString(values []string, expected string) bool {
+	for _, value := range values {
+		if value == expected {
+			return true
+		}
+	}
+	return false
+}
+
+func (r *Runner) runWithHeartbeat(ctx context.Context, assignment workercontract.Assignment, run func(context.Context) (execution.RuntimeResult, error)) (execution.RuntimeResult, error) {
+	resultCh := make(chan runtimeStopResult, 1)
 	runContext, cancel := context.WithCancel(ctx)
 	defer cancel()
 	go func() {
 		value, err := run(runContext)
-		resultCh <- result{value: value, err: err}
+		resultCh <- runtimeStopResult{value: value, err: err}
 	}()
 	ticker := time.NewTicker(r.config.HeartbeatInterval)
 	defer ticker.Stop()
@@ -135,20 +249,41 @@ func (r *Runner) runWithHeartbeat(ctx context.Context, assignment workercontract
 		case value := <-resultCh:
 			return value.value, value.err
 		case <-ticker.C:
-			_ = r.waitHeartbeat(ctx, assignment.AgentRunID, leaseTokenDigest(assignment.LeaseToken))
+			heartbeatErr := r.waitHeartbeat(ctx, assignment.AgentRunID, leaseTokenDigest(assignment.LeaseToken))
+			if heartbeatErr == nil {
+				continue
+			}
+			cancel()
+			return r.waitRuntimeStop(resultCh, heartbeatErr)
 		case <-ctx.Done():
-			return execution.RuntimeResult{}, ctx.Err()
+			cancel()
+			return r.waitRuntimeStop(resultCh, ctx.Err())
 		}
+	}
+}
+
+func (r *Runner) waitRuntimeStop(resultCh <-chan runtimeStopResult, cause error) (execution.RuntimeResult, error) {
+	timer := time.NewTimer(r.config.RuntimeStopTimeout)
+	defer timer.Stop()
+	select {
+	case value := <-resultCh:
+		return value.value, errors.Join(cause, value.err)
+	case <-timer.C:
+		return execution.RuntimeResult{}, errors.Join(cause, errors.New("worker runtime shutdown timed out"))
 	}
 }
 
 func (r *Runner) waitHeartbeat(ctx context.Context, runID, tokenDigest string) error {
 	request := workercontract.Heartbeat{WorkerID: r.config.WorkerID, AgentRunID: runID, LeaseTokenSHA256: tokenDigest}
-	if _, err := r.config.Client.Heartbeat(ctx, request); err != nil {
+	response, err := r.config.Client.Heartbeat(ctx, request)
+	if err != nil {
 		if protocolErr, ok := err.(*ProtocolError); ok && protocolErr.Retryable() {
 			return nil
 		}
 		return fmt.Errorf("heartbeat worker: %w", err)
+	}
+	if runID != "" && !response.LeaseRenewed {
+		return errWorkerLeaseNotRenewed
 	}
 	return nil
 }
@@ -158,7 +293,7 @@ func (r *Runner) reportWithRetry(ctx context.Context, report workercontract.Repo
 		response, err := r.config.Client.Report(ctx, report)
 		if err == nil {
 			switch response.Disposition {
-			case "accepted", "accepted_fenced", "duplicate", "late":
+			case "accepted", "accepted_fenced", "candidate_received", "duplicate", "late":
 				return nil
 			case "terminal_conflict":
 				return fmt.Errorf("report worker: terminal conflict")
@@ -215,7 +350,7 @@ func ReportFromRuntime(assignment workercontract.Assignment, result execution.Ru
 	for _, failure := range result.CaptureFailures {
 		report.CaptureFailures = append(report.CaptureFailures, workercontract.CaptureFailure{Kind: string(failure.Kind), Stage: failure.Stage, Error: "capture_failed"})
 	}
-	for _, item := range []execution.Artifact{result.Stdout, result.Stderr, result.Diff, result.ChangedFiles} {
+	for _, item := range []execution.Artifact{result.Stdout, result.Stderr, result.Diff, result.ChangedFiles, result.Candidate} {
 		if item.SHA256 == "" && len(item.Content) == 0 && item.SizeBytes == 0 && item.CaptureError == "" {
 			continue
 		}

@@ -4,7 +4,7 @@
 
 **Blocked by：** 顶层 Ticket 06、07-01、07-02、07-03、07-04。`ready-for-agent` 不解除任何前置条件。
 
-**Status：** ready-for-agent（仅文档成熟度）
+**Status：** implemented-with-ticket06-native-evidence-gap
 
 ## Integration checks
 

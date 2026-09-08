@@ -56,6 +56,7 @@ func Migrations() []migration.Migration {
 		{Version: 2, Name: "create_project_bootstrap", SQL: projectSchemaSQL},
 		changeMigration(),
 		workerMigration(),
+		planningMigration(),
 	}
 }
 

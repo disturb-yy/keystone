@@ -19,12 +19,13 @@
 - `go.mod` 声明模块 `github.com/disturb-yy/keystone`，Go 版本为 `1.27`，并包含当前 CLI 所需的 Cobra、跨平台锁所需的 `golang.org/x/sys` 和纯 Go SQLite driver `modernc.org/sqlite`。
 - `Makefile` 已提供根级 `test`、`build`、`lint` 和 `dashboard-build` 入口；其中 Dashboard 目标预期从 `dashboard/package-lock.json` 安装依赖后运行 npm 命令。
 - `docs/FE20260903080401/` 保存 V1 实施基线、里程碑、验收清单和版本化 Ticket/规格文档。
-- `docs/FE20260903080401/` 下的 Ticket 02 目录包含本地状态、Migration 和边界 Contract 的实施规格与验收记录；`docs/architecture-baseline/` 不在本工作树中，若由其他 checkout 提供也只属于静态设计输入。
+- `docs/FE20260903080401/` 下保存 Ticket 02 的本地状态/Migration/Contract 验收记录和 Ticket 07 的 Planning 实施规格；`docs/architecture-baseline/` 不在本工作树中，若由其他 checkout 提供也只属于静态设计输入。
 - `internal/infrastructure/config`、`internal/infrastructure/logging` 和 `internal/infrastructure/id` 已是三个标准库 Go package，各自有源码、聚焦测试以及局部 `AGENTS.md`/`INDEX.md`；它们只提供配置解析、结构化日志和 UUIDv7 生成，不实现业务或持久化行为。
 - `internal/infrastructure/localstate` 提供数据根路径、目录初始化、跨平台单实例锁和诊断元数据；`internal/infrastructure/migration` 提供基于纯 Go SQLite driver 的 `t_schema_migrations` runner。两者均不实现 Daemon 或业务 Schema。
-- `contracts/controlplane` 已提供 `/v1` Control Plane 的 Health、Error、Daemon status/stop 最小 JSON 边界 DTO；`contracts/worker` 已提供 Worker DTO。两者各自有局部 `AGENTS.md`/`INDEX.md`，不引用 Domain、不访问 SQLite，Control Plane Contract 不实现 HTTP Handler。
-- `dashboard/` 已有 React、TypeScript、Vite 工程、`package-lock.json` 和构建/检查脚本；`cmd/keystone` 与 `cmd/keystone-daemon` 已落地 CLI 和独立 Daemon 入口，`cmd/keystone-worker`、`configs`、`migrations/` 和 `scripts/` 当前尚未创建。
-- `internal/daemon` 已落地 Daemon 生命周期、loopback HTTP、SQLite readiness 和资源关闭；它使用 `internal/infrastructure/localstate` 的锁/运行元数据和 `internal/infrastructure/migration` 的 `t_schema_migrations`，当前不创建业务 Schema。当前工作树仍没有 Worker runtime、Project/Change/Ticket 业务行为或业务数据库 Schema。根 Make 入口验证的是当前已落地的 Go package 与 Dashboard 工程；目标架构和静态设计输入不是服务行为证据。
+- `internal/infrastructure/manifest`、`repository`、`artifact` 和 `workstore` 已分别落地 Manifest、Git/固定 revision 临时 Snapshot、内容寻址 Artifact 和 Project/Change/Worker/Planning SQLite adapter；业务 Migration 仍由 `workstore` 持有。
+- `contracts/controlplane` 已提供 `/v1` Daemon、Project、Change、Artifact 和 AgentRun DTO；`contracts/worker` 已提供 Worker DTO 以及非权威 `planning_candidate` 结果模式。两者不引用 Domain、不访问 SQLite，HTTP Handler 位于 `internal/daemon`。
+- `dashboard/` 已有 React、TypeScript、Vite 工程与锁文件；`cmd/keystone`、`cmd/keystone-daemon`、`cmd/keystone-worker` 已落地，`configs/` 仅有占位文件，根级 `migrations/` 和 `scripts/` 尚未创建。
+- `internal/daemon` 已组合本机生命周期、Project/Change HTTP、Worker authority、Planning Coordinator、SQLite readiness 和资源关闭；`internal/planning` 已实现 Understand、Design、Plan 的严格 Contract/Strategy/Coordinator。Ticket 08 的 Ticket Graph 及后续生产执行链仍未实现；真实 Codex 与原生 Windows 验收证据不能由 fake 测试或交叉构建替代。
 
 ## Architecture
 
@@ -79,8 +80,9 @@ Project → Change → Ticket Dependency Graph → Ticket → Execution DAG → 
 
 ### 目标状态与事实边界
 
-以下是目标架构的状态与事实边界；当前 checkout 已落地 M1 本机 CLI/Daemon
-运行链，但完整业务服务和后续 Worker 执行链尚无实现。
+以下是目标架构的状态与事实边界；当前 checkout 已落地本机 CLI/Daemon、Project、
+Change、Worker 及只读 Planning 代码链，但 Ticket 06 的真实 Codex/原生 Windows 证据和
+Ticket 08 之后的业务能力仍未完成。
 
 - Control Plane Daemon 持有 Project、Change、Ticket、Gate、Decision、Evidence、Execution 和派生追踪信息的权威持久状态。
 - Repository 持有源码和版本化项目知识；Git 持有代码版本事实。
@@ -97,7 +99,7 @@ Project → Change → Ticket Dependency Graph → Ticket → Execution DAG → 
 └── domain/       # 业务强边界
 ```
 
-目标领域边界为 `internal/work`、`internal/planning`、`internal/governance`、`internal/execution` 和 `internal/traceability`；`internal/infrastructure` 当前承载 config、logging、id、localstate 和 migration 五个窄职责基础 package。上述业务领域目录当前尚未实现，新增代码时以实际目标领域和最近一级文档为准。
+目标领域边界为 `internal/work`、`internal/planning`、`internal/governance`、`internal/execution` 和 `internal/traceability`；当前 `work`、`planning`、`execution` 已有实现，`governance`、`traceability` 尚未创建。`internal/infrastructure` 的具体 package 以根 `INDEX.md` 和各自局部文档为准。
 
 复杂度较低时：
 

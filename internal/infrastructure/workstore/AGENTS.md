@@ -12,3 +12,14 @@
   AgentRun、ArtifactRef 和统一 Event ledger。
 - `AgentRunReportLate` 是统一 `t_project_events` 的追加事件；不得创建 Worker 私有事件账本，
   不得通过 Report 重放覆盖既有终态。
+- Schema v5 只做 additive Planning 扩展；旧 ArtifactRef、AgentRun 和 Lease 的空 metadata/result mode 必须保持可读。
+- 同一 Change 最多一个 running Planning AgentRun。Planning start 使用显式目标 stage、attempt、ChangeVersion 和 source revision 围栏，不提前改写 checkpoint。
+- `planning_candidate` Lease 的首个有效 Report 只追加 candidate/raw-log 事实并消费 Lease；不完成 AgentRun、不追加 stage 事件、不推进 Change。
+- Planning completion 在单一 SQLite 事务内完成 ArtifactRef/link、AgentRun、统一 Event 和条件 checkpoint 推进；非当前 attempt 只能记录 fenced 终态。
+- 恢复查询包含 active 的 Intent/Understand/Design checkpoint，也包含任意 Change status 下尚未收敛的 running Planning run；后者允许 candidate 或待持久化失败在围栏下完成裁决，Plan checkpoint 不再启动 Planning。
+- Planning Lease 过期本身不推断 Runtime 已停止；late Report、空闲 Heartbeat、Supervisor
+  WorkerProcessLost 或 Daemon restart 才能形成 durable system failure candidate。Report 首次
+ 终态按 digest 幂等，冲突 Report 不新增 receipt。
+- Assignment 与 completion 都在事务内重新检查 Change status/version；Pause、Cancel 或
+  dispatch fence 不能创建新的 Lease 或推进 Change。调度前失败和 Artifact store 故障也必须
+  形成可恢复的 durable candidate，而不是依赖进程内错误缓存。

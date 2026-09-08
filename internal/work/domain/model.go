@@ -41,6 +41,8 @@ const (
 	AgentRunOutcomeSucceeded     = "succeeded"
 	AgentRunOutcomeFailed        = "failed"
 	AgentRunOutcomeHumanRequired = "human_required"
+	AgentRunKindLegacy           = "legacy"
+	AgentRunKindPlanning         = "planning"
 
 	// HumanDecisionKind 是人类恢复决策的固定集合。
 	HumanDecisionRetry  = "retry"
@@ -111,11 +113,17 @@ type ArtifactIdentity struct {
 
 // ArtifactRef 是业务对象对 Artifact 内容的稳定关联。
 type ArtifactRef struct {
-	ID         ArtifactRefID
-	ChangeID   ChangeID
-	ArtifactID ArtifactID
-	Role       string
-	Ordinal    int
+	ID                   ArtifactRefID
+	ChangeID             ChangeID
+	ArtifactID           ArtifactID
+	Role                 string
+	Ordinal              int
+	Kind                 string
+	SchemaVersion        string
+	Summary              string
+	SourceRevision       string
+	InputArtifactRefIDs  []ArtifactRefID
+	RawLogArtifactRefIDs []ArtifactRefID
 }
 
 // Validate 检查 ArtifactRef 的身份、归属和稳定角色。
@@ -132,7 +140,16 @@ func (r ArtifactRef) Validate() error {
 	if !validArtifactRole(r.Role) || r.Ordinal < 0 {
 		return fmt.Errorf("%w: artifact reference fields are invalid", ErrInvalidRequest)
 	}
+	if err := validateArtifactMetadata(r); err != nil {
+		return err
+	}
 	return nil
+}
+
+// IsLegacy 返回该引用是否来自尚未携带 Planning metadata 的旧记录。
+func (r ArtifactRef) IsLegacy() bool {
+	return r.Kind == "" && r.SchemaVersion == "" && r.Summary == "" && r.SourceRevision == "" &&
+		len(r.InputArtifactRefIDs) == 0 && len(r.RawLogArtifactRefIDs) == 0
 }
 
 // Artifact 描述可被业务引用的内容摘要，不包含物理路径。
@@ -152,15 +169,17 @@ type AgentRunArtifact struct {
 
 // AgentRun 是一个阶段的一次不可改写尝试。
 type AgentRun struct {
-	ID          AgentRunID
-	ChangeID    ChangeID
-	Stage       LifecycleStage
-	Attempt     int
-	Status      string
-	Outcome     string
-	StartedAt   time.Time
-	CompletedAt *time.Time
-	Artifacts   []AgentRunArtifact
+	ID             AgentRunID
+	ChangeID       ChangeID
+	Stage          LifecycleStage
+	Attempt        int
+	RunKind        string
+	SourceRevision string
+	Status         string
+	Outcome        string
+	StartedAt      time.Time
+	CompletedAt    *time.Time
+	Artifacts      []AgentRunArtifact
 }
 
 // HumanDecision 是 human_required 状态上的人工恢复事实。
@@ -370,6 +389,9 @@ func (r AgentRun) Validate() error {
 	if r.Status == AgentRunStatusRunning && (r.CompletedAt != nil || r.Outcome != "") {
 		return fmt.Errorf("%w: running agent run cannot have completion fields", ErrInvalidRequest)
 	}
+	if err := validateAgentRunKind(r); err != nil {
+		return err
+	}
 	for _, artifact := range r.Artifacts {
 		if err := artifact.Validate(); err != nil {
 			return err
@@ -377,6 +399,9 @@ func (r AgentRun) Validate() error {
 	}
 	return nil
 }
+
+// IsPlanning 返回该 AgentRun 是否由 Planning authority 创建。
+func (r AgentRun) IsPlanning() bool { return r.RunKind == AgentRunKindPlanning }
 
 // Validate 检查 AgentRun 与 ArtifactRef 的稳定关联字段。
 func (a AgentRunArtifact) Validate() error {
@@ -394,6 +419,56 @@ func (a AgentRunArtifact) Validate() error {
 
 func validArtifactRole(role string) bool {
 	return role == ArtifactRoleChangeIntent || role == ArtifactRoleInput || role == ArtifactRoleOutput || role == ArtifactRoleFailure
+}
+
+func validateArtifactMetadata(ref ArtifactRef) error {
+	if ref.IsLegacy() {
+		return nil
+	}
+	if strings.TrimSpace(ref.Kind) == "" || ref.Kind != strings.TrimSpace(ref.Kind) || len(ref.Kind) > 64 {
+		return fmt.Errorf("%w: artifact kind is invalid", ErrInvalidRequest)
+	}
+	if len(ref.SchemaVersion) > 128 || !utf8.ValidString(ref.SchemaVersion) || len([]rune(ref.Summary)) > 256 || !utf8.ValidString(ref.Summary) || !validObjectID(ref.SourceRevision) {
+		return fmt.Errorf("%w: artifact planning metadata is invalid", ErrInvalidRequest)
+	}
+	if err := validateArtifactRefLinks(ref.InputArtifactRefIDs, "input"); err != nil {
+		return err
+	}
+	return validateArtifactRefLinks(ref.RawLogArtifactRefIDs, "raw_log")
+}
+
+func validateArtifactRefLinks(refs []ArtifactRefID, relation string) error {
+	seen := make(map[ArtifactRefID]struct{}, len(refs))
+	for _, refID := range refs {
+		if err := validateUUIDv7(string(refID), relation+"_artifact_ref_id"); err != nil {
+			return err
+		}
+		if _, ok := seen[refID]; ok {
+			return fmt.Errorf("%w: duplicate %s artifact reference", ErrInvalidRequest, relation)
+		}
+		seen[refID] = struct{}{}
+	}
+	return nil
+}
+
+func validateAgentRunKind(run AgentRun) error {
+	switch run.RunKind {
+	case "", AgentRunKindLegacy:
+		if run.SourceRevision != "" {
+			return fmt.Errorf("%w: legacy agent run cannot carry source revision", ErrInvalidRequest)
+		}
+		return nil
+	case AgentRunKindPlanning:
+		if run.Stage != LifecycleStageUnderstand && run.Stage != LifecycleStageDesign && run.Stage != LifecycleStagePlan {
+			return fmt.Errorf("%w: planning agent run stage is invalid", ErrInvalidRequest)
+		}
+		if !validObjectID(run.SourceRevision) {
+			return fmt.Errorf("%w: planning source revision is invalid", ErrInvalidRequest)
+		}
+		return nil
+	default:
+		return fmt.Errorf("%w: agent run kind is invalid", ErrInvalidRequest)
+	}
 }
 
 // Validate 检查人工决策类型和 Change 归属。

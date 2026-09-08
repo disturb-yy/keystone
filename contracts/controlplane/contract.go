@@ -152,10 +152,16 @@ type HumanDecisionResponse struct {
 
 // ArtifactRefDTO 是 ArtifactRef 的稳定公开摘要。
 type ArtifactRefDTO struct {
-	ArtifactRefID string `json:"artifact_ref_id"`
-	ArtifactID    string `json:"artifact_id"`
-	Role          string `json:"role"`
-	Ordinal       int    `json:"ordinal"`
+	ArtifactRefID        string   `json:"artifact_ref_id"`
+	ArtifactID           string   `json:"artifact_id"`
+	Role                 string   `json:"role"`
+	Ordinal              int      `json:"ordinal"`
+	Kind                 string   `json:"kind,omitempty"`
+	SchemaVersion        string   `json:"schema_version,omitempty"`
+	Summary              string   `json:"summary,omitempty"`
+	SourceRevision       string   `json:"source_revision,omitempty"`
+	InputArtifactRefIDs  []string `json:"input_artifact_ref_ids,omitempty"`
+	RawLogArtifactRefIDs []string `json:"raw_log_artifact_ref_ids,omitempty"`
 }
 
 // ArtifactDTO 是 Artifact 内容身份和媒体类型摘要。
@@ -176,15 +182,17 @@ type AgentRunArtifactDTO struct {
 
 // AgentRunDTO 是 AgentRun 的稳定公开摘要。
 type AgentRunDTO struct {
-	AgentRunID  string                `json:"agent_run_id"`
-	ChangeID    string                `json:"change_id"`
-	Stage       string                `json:"stage"`
-	Attempt     int                   `json:"attempt"`
-	Status      string                `json:"status"`
-	Outcome     string                `json:"outcome"`
-	Artifacts   []AgentRunArtifactDTO `json:"artifacts"`
-	StartedAt   string                `json:"started_at"`
-	CompletedAt *string               `json:"completed_at"`
+	AgentRunID     string                `json:"agent_run_id"`
+	ChangeID       string                `json:"change_id"`
+	Stage          string                `json:"stage"`
+	Attempt        int                   `json:"attempt"`
+	RunKind        string                `json:"run_kind,omitempty"`
+	SourceRevision string                `json:"source_revision,omitempty"`
+	Status         string                `json:"status"`
+	Outcome        string                `json:"outcome"`
+	Artifacts      []AgentRunArtifactDTO `json:"artifacts"`
+	StartedAt      string                `json:"started_at"`
+	CompletedAt    *string               `json:"completed_at"`
 }
 
 // HumanDecisionDTO 是 HumanDecision 的稳定公开摘要。

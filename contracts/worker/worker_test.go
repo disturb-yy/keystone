@@ -34,8 +34,9 @@ func TestJSONMarshalIncludesRequiredFields(t *testing.T) {
 				LeaseToken:    "lease-opaque",
 				WorkspacePath: "/tmp/keystone-workspace",
 				Runtime:       "codex",
+				ResultMode:    ResultModePlanningCandidate,
 			},
-			want: `{"agent_run_id":"run-1","lease_token":"lease-opaque","workspace_path":"/tmp/keystone-workspace","runtime":"codex"}`,
+			want: `{"agent_run_id":"run-1","lease_token":"lease-opaque","workspace_path":"/tmp/keystone-workspace","runtime":"codex","result_mode":"planning_candidate"}`,
 		},
 		{
 			name: "report",
@@ -143,6 +144,7 @@ func TestDecodeStrictRejectsAmbiguousPayloads(t *testing.T) {
 	}{
 		{name: "unknown field", input: `{"worker_id":"worker-1","protocol_version":"v1","capabilities":[],"extra":true}`},
 		{name: "duplicate field", input: `{"worker_id":"worker-1","worker_id":"worker-2","protocol_version":"v1","capabilities":[]}`},
+		{name: "mixed-case alias", input: `{"worker_id":"worker-1","Worker_ID":"worker-2","protocol_version":"v1","capabilities":[]}`},
 		{name: "multiple values", input: `{"worker_id":"worker-1","protocol_version":"v1","capabilities":[]} {}`},
 		{name: "array", input: `[]`},
 	}
