@@ -69,3 +69,4 @@
 | [0055](./0055-ticket-input-revision-and-commit-chain.md) | 逐 Ticket 输入 Revision 与受控提交链 | 已接受 |
 | [0056](./0056-verification-recovery-and-snapshot-checkpoint.md) | 验证恢复只从耐久 Snapshot 继续 | 已接受 |
 | [0057](./0057-execution-schema-and-atomic-migration.md) | 执行 Schema 与原子迁移 | 已接受 |
+| [0058](./0058-dashboard-observation-query-and-refresh-boundary.md) | Dashboard Observation 的 Query 与 Refresh 边界 | 已接受 |

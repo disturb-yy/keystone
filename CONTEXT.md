@@ -160,6 +160,14 @@ _避免_：ArtifactSummary、数据库 BLOB 暴露、未校验的本机文件读
 供 Client 观察的有界 Change 快照，由 ChangeView 表达当前字段并以 repository_root 返回规范化 RepositoryBinding，所有时间字段使用 UTC RFC3339Nano；Event、AgentRun、ArtifactRef 和 HumanDecision 保留在独立 Trace 列表中。M3 不在一个 Change 查询中嵌入完整历史、原始 Artifact 内容或无界分页结果。
 _避免_：持久化行模型、完整审计导出、可变 Client 缓存
 
+**ChangeObservationReadModel**：
+由 Daemon 为 Dashboard 组合的有界 Change 观察快照，按独立 section 包含 Lifecycle、CanonicalTicketGraph、Execution、Trace、Artifact、Health 与 available_actions；它只投影已有权威事实，不建立第二套业务账本或状态机。每个 section 必须标记 available 或 not_yet_available；权威读模型不可用时整个观察 Query 失败。
+_避免_：Dashboard 本地真相、Client 推导的 Lifecycle、无界聚合响应
+
+**ObservationSection**：
+ChangeObservationReadModel 中带有明确可用性标记的独立观察片段。available 加空集合表达真实 empty；not_yet_available 表达上游尚未形成事实，不能用空数组伪装已完成，也不能由 Client 推导原因。
+_避免_：缺失字段、伪造的空状态、部分成功快照
+
 **DomainEvent**：
 在权威业务事实发生时追加的不可变审计记录；它解释状态如何到达当前值，但不以重放替代权威状态。它的公开表达只包含固定的边界字段和 ArtifactRef，不承载无约束内容。
 _避免_：应用日志、Worker 自报、完整 Event Sourcing
@@ -216,6 +224,10 @@ _避免_：ChangeStatus、AgentRunOutcome、Worker 进程存活探针
 由 Daemon 监管的本机副作用执行进程实例；它在一次进程生命周期内拥有独立的 Worker 身份、协议凭据和可用性事实，不拥有 Change 或 Ticket 权威状态。
 _避免_：DaemonInstance、AgentRun、WorkerPool
 
+**WorkerHealthReadModel**：
+由 Daemon 从 Worker 注册、能力和心跳事实形成的有界健康观察摘要；它只供 Client 观察可用性、能力与最近心跳，不允许 Client 自行计算 freshness，也不表达 Change、Ticket 或执行成功。
+_避免_：Worker 自报业务状态、Worker Protocol、Dashboard 本地健康真相
+
 **WorkerProtocol**：
 Daemon 与 Worker 之间用于注册、心跳、领取 Assignment 和提交 Report 的窄执行边界；它只传递执行所需的授权与结果，不承载 Control Plane 的生命周期命令。
 _避免_：Control Plane API、应用日志、数据库接口
@@ -255,6 +267,10 @@ _避免_：Worker 自报状态、重试命令、ChangeStatus
 **HumanDecision**：
 对 human_required Change 追加的人工恢复事实；V1 只允许 retry 或 cancel，Daemon 解释其合法动作，Client 不直接指定 LifecycleStage 或 ChangeStatus。Execute 阶段的 retry 只为同一 CanonicalTicket 在既有 Workspace 创建新的 AgentRun，不重置或清理已有 Diff；Verify 与 FinalVerify 的恢复语义由 VerificationRecovery 限定。
 _避免_：状态字段覆盖、可编辑备注、Worker Report
+
+**NeedsHumanQuery**：
+由 Daemon 根据已形成的 human_required/HUMAN_REQUIRED 事实返回的有界待人工列表；每项包含 scope、reason_code、当前 ChangeVersion、允许的 available_actions 与有界 evidence references。它不通过 AgentRun、heartbeat、错误文案或空 section 推导人工需求。
+_避免_：Client 推导的 Human Required、失败日志列表、自动恢复队列
 
 **ChangeCommand**：
 由 Client 提交、以 ChangeVersion 为前置条件的状态控制请求；M3 只允许 pause、resume 与 cancel，不承载 HumanDecision 或目标状态字段。
@@ -608,6 +624,10 @@ _避免_：RunnableTicket、DaemonReadiness
 专门报告 DaemonReadiness 的本机 HTTP 端点。它不表示任何被 Keystone 管理的 Repository 服务状态。
 _避免_：Demo Service Health Endpoint、业务健康检查
 
+**RefreshHint**：
+Daemon 在权威事实写入后向 Dashboard 发送的有界刷新提示；它只包含受控 resource_type 及可选 Project/Change 关联，不携带状态、Artifact、Command、Decision 或 replay 信息。Client 必须通过 Query 获取新快照，不能将 RefreshHint 当作业务事件或状态来源。
+_避免_：SSE 状态同步、可靠事件队列、Event Replay
+
 **DemoServiceHealthEndpoint**：
 Golden Path 中被 Keystone 管理的示例服务自身的健康检查端点。它与 DaemonReadinessEndpoint 属于不同系统主体。
 _避免_：DaemonReadinessEndpoint
@@ -615,17 +635,21 @@ _避免_：DaemonReadinessEndpoint
 ## Golden Path 验收
 
 **GoldenPathFixture**：
-仓库内保存的不含 `.git` 的 Go HTTP demo 初始源；每次 E2E 将其复制到临时目录并执行 `git init`，不把嵌套 Git Repository 纳入 Keystone 主仓库。
+仓库内保存的不含 `.git` 的 Go HTTP demo 初始源，可包含已版本化的 ProjectManifest V2；每次 E2E 将其复制到临时目录并执行 `git init`，不把嵌套 Git Repository 纳入 Keystone 主仓库。
 _避免_：共享临时 Repository、携带历史的 fixture、主仓库子模块
 
 **GoldenPathRun**：
-从 `init` 到 Dashboard Trace 的一次完整验收尝试，由公开 CLI 或 Control Plane API 驱动并记录实际结果；直接写 SQLite、调用内部 Service 或用 debug 接口伪造状态不属于 GoldenPathRun。
+从 `init` 到 Dashboard Trace 的一次完整验收尝试，由公开 CLI 或 Control Plane API 驱动并记录实际结果；所有 runtime-backed AgentRun 使用真实 Codex，直接写 SQLite、调用内部 Service 或用 debug 接口伪造状态不属于 GoldenPathRun。
 _避免_：单元测试、局部 smoke、mock Runtime 代替的完整链路
 
+**GoldenPathRunner**：
+一个显式调用、可重复且有界的本机验收编排器；它只提交公开 Command、读取公开 Query 并采集证据，不被普通测试自动触发，也不拥有业务状态或恢复决策权。
+_避免_：测试 fixture、内部 Application 驱动器、数据库脚本
+
 **RealCodexAcceptance**：
-Worker 在 Assigned Workspace 中实际启动 Codex CLI 并形成源码修改的验收事实，必须能记录 Codex 版本和真实进程结果；fake Runtime、版本探针和交叉编译不能替代它。
+Worker 在一次 runtime-backed AgentRun 中实际启动 Codex CLI 并形成可复核候选或审查结果的验收事实；Execute 阶段必须形成源码修改，Planning/Verify 阶段可分别形成 candidate 或只读审查结果，且必须记录 Codex 版本和真实进程结果。Fake Runtime、版本探针和交叉编译不能替代它。
 _避免_：Runtime 自报成功、fake Codex、交叉编译运行证据
 
 **GoldenPathEvidence**：
-一条成功 GoldenPathRun 的脱敏复盘记录，覆盖关键输入、命令、退出码、Artifact、AgentRun、Decision、Git revision 和 Dashboard 观察；它不得包含 secret、token 或本机绝对路径，且未完成真实 Codex 验收时不得伪造成功记录。
+按平台保存的一条或多条成功 GoldenPathRun 脱敏复盘记录，分别覆盖 Keystone Source、Demo Candidate 和 GoldenPath Trace 三条不能互相替代的证据链；它不得包含 secret、token 或本机绝对路径，且未完成真实 Codex 验收时不得伪造成功记录。
 _避免_：设计计划、仅有测试日志的记录、未验证的运行摘要
