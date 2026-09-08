@@ -21,6 +21,7 @@ const (
 	planningCandidateMediaType  = "application/json; charset=utf-8"
 	planningContextKind         = "project_context"
 	planningContextSummary      = "Planning project context"
+	ticketizeGeneratorV1        = "ticketize.v1"
 )
 
 // CoordinatorState 是 Planning 对 Work authority 的查询与提交边界。
@@ -196,6 +197,9 @@ func (c *Coordinator) reconcileChange(ctx context.Context, change domain.Change)
 		if change.Status == domain.ChangeStatusPaused {
 			return c.releaseSnapshot(run.ID)
 		}
+		if run.Stage == domain.LifecycleStageTicketize {
+			return c.settleTicketizeCandidate(ctx, change, *run, candidate)
+		}
 		return c.settleCandidate(ctx, change, *run, candidate)
 	}
 	if change.LatestAgentRun != nil && change.LatestAgentRun.Status == domain.AgentRunStatusRunning {
@@ -211,6 +215,9 @@ func (c *Coordinator) startStage(ctx context.Context, change domain.Change) erro
 	stage, ok := targetStage(change.Stage)
 	if !ok {
 		return nil
+	}
+	if stage == StageTicketize {
+		return c.startTicketizeStage(ctx, change)
 	}
 	strategy := c.strategies[stage]
 	target, available, err := c.dispatcher.Select(ctx, strategy.Definition().Capability)
@@ -259,8 +266,54 @@ func (c *Coordinator) startStage(ctx context.Context, change domain.Change) erro
 	return c.dispatchPreparedRun(ctx, change, run, target, strategy, input, inputArtifact, contextArtifact)
 }
 
+func (c *Coordinator) startTicketizeStage(ctx context.Context, change domain.Change) error {
+	port, ok := c.state.(work.TicketizeStatePort)
+	if !ok {
+		return nil
+	}
+	target, available, err := c.dispatcher.Select(ctx, RuntimeCapabilityPlanningReadOnly)
+	if err != nil {
+		return fmt.Errorf("select ticketize worker: %w", err)
+	}
+	if !available {
+		return nil
+	}
+	input, planRef, planArtifact, err := c.loadTicketizeInput(ctx, change)
+	if err != nil {
+		if errors.Is(err, domain.ErrTicketizeUnavailable) {
+			return err
+		}
+		return fmt.Errorf("load ticketize input: %w", err)
+	}
+	inputRefs := []domain.ArtifactRefID{planRef.ID}
+	var inputWrites []work.PlanningArtifactWrite
+	contextArtifact, contextRef, contextErr := c.prepareProjectContext(ctx, change, input.ProjectContext)
+	if contextErr != nil {
+		return errors.Join(fmt.Errorf("prepare ticketize context: %w", contextErr), domain.ErrTicketizeUnavailable)
+	}
+	if contextRef.ID != "" {
+		inputRefs = append(inputRefs, contextRef.ID)
+	} else {
+		inputWrites = append(inputWrites, work.PlanningArtifactWrite{Identity: contextArtifact.Identity, MediaType: contextArtifact.MediaType, Kind: planningContextKind, SchemaVersion: ProjectContextSchemaV1, Summary: planningContextSummary, SourceRevision: change.BaseRevision})
+	}
+	run, err := port.StartTicketizeRun(ctx, work.StartPlanningRunRequest{
+		ChangeID: change.ID, TargetStage: domain.LifecycleStageTicketize, ExpectedChangeVersion: change.Version,
+		SourceRevision: change.BaseRevision, Actor: planningActor, InputArtifactRefIDs: inputRefs, InputArtifacts: inputWrites,
+	})
+	if errors.Is(err, domain.ErrPlanningRunConflict) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("start ticketize run: %w", err)
+	}
+	return c.dispatchTicketizePreparedRun(ctx, change, run, target, input, planArtifact, contextArtifact)
+}
+
 func (c *Coordinator) dispatchExistingRun(ctx context.Context, change domain.Change, run domain.AgentRun) error {
 	stage := stageFromLifecycle(run.Stage)
+	if stage == StageTicketize {
+		return c.dispatchExistingTicketizeRun(ctx, change, run)
+	}
 	strategy, ok := c.strategies[stage]
 	if !ok {
 		return c.failBeforeCandidate(ctx, change, run, "coordination_failed")
@@ -281,6 +334,67 @@ func (c *Coordinator) dispatchExistingRun(ctx context.Context, change domain.Cha
 		return c.failBeforeCandidate(ctx, change, run, "artifact_unavailable")
 	}
 	return c.dispatchPreparedRun(ctx, change, run, target, strategy, input, inputArtifact, contextArtifact)
+}
+
+func (c *Coordinator) dispatchExistingTicketizeRun(ctx context.Context, change domain.Change, run domain.AgentRun) error {
+	input, _, planArtifact, err := c.loadTicketizeInput(ctx, change)
+	if err != nil {
+		if errors.Is(err, domain.ErrTicketizeUnavailable) {
+			return err
+		}
+		return c.failBeforeCandidate(ctx, change, run, classifyCoordinatorError(err))
+	}
+	target, available, err := c.dispatcher.Select(ctx, RuntimeCapabilityPlanningReadOnly)
+	if err != nil {
+		return fmt.Errorf("select ticketize worker: %w", err)
+	}
+	if !available {
+		return nil
+	}
+	contextArtifact, _, err := c.prepareProjectContext(ctx, change, input.ProjectContext)
+	if err != nil {
+		return errors.Join(fmt.Errorf("prepare ticketize context: %w", err), domain.ErrTicketizeUnavailable)
+	}
+	return c.dispatchTicketizePreparedRun(ctx, change, run, target, input, planArtifact, contextArtifact)
+}
+
+func (c *Coordinator) dispatchTicketizePreparedRun(ctx context.Context, change domain.Change, run domain.AgentRun, target string, input TicketGenerationInput, planArtifact, contextArtifact domain.Artifact) error {
+	instruction, err := BuildTicketizePrompt(input)
+	if err != nil {
+		return c.failBeforeCandidate(ctx, change, run, classifyCoordinatorError(err))
+	}
+	snapshot, err := c.snapshots.Materialize(ctx, change.RepositoryRoot, change.BaseRevision)
+	if err != nil {
+		return c.failBeforeCandidate(ctx, change, run, "snapshot_failed")
+	}
+	if snapshot == nil || snapshot.Root() == "" || snapshot.Revision() != change.BaseRevision {
+		var closeErr error
+		if snapshot != nil {
+			closeErr = snapshot.Close()
+		}
+		return errors.Join(c.failBeforeCandidate(ctx, change, run, "revision_mismatch"), closeErr)
+	}
+	c.rememberSnapshot(run.ID, change.ID, snapshot)
+	err = c.dispatcher.Dispatch(ctx, DispatchRequest{
+		Target: target, AgentRunID: run.ID, Attempt: run.Attempt, WorkspacePath: snapshot.Root(), Instruction: instruction,
+		BeforeRevision: change.BaseRevision,
+		Inputs:         []DispatchArtifact{{Kind: string(ArtifactKindPlan), SHA256: planArtifact.Identity.SHA256, SizeBytes: planArtifact.Identity.ByteLength, MediaType: planArtifact.MediaType}, {Kind: planningContextKind, SHA256: contextArtifact.Identity.SHA256, SizeBytes: contextArtifact.Identity.ByteLength, MediaType: contextArtifact.MediaType}},
+	})
+	if err != nil {
+		assigned, assignedErr := c.dispatcher.Assigned(ctx, run.ID)
+		if assignedErr != nil {
+			return errors.Join(fmt.Errorf("inspect failed ticketize dispatch: %w", assignedErr), err)
+		}
+		if assigned {
+			return nil
+		}
+		closeErr := c.releaseSnapshot(run.ID)
+		if errors.Is(err, ErrDispatchFenced) {
+			return closeErr
+		}
+		return errors.Join(c.failBeforeCandidate(ctx, change, run, "dispatch_failed"), closeErr)
+	}
+	return nil
 }
 
 func (c *Coordinator) dispatchPreparedRun(ctx context.Context, change domain.Change, run domain.AgentRun, target string, strategy StageStrategy, input StageInput, inputArtifact, contextArtifact domain.Artifact) error {
@@ -432,6 +546,91 @@ func (c *Coordinator) settleCandidate(ctx context.Context, change domain.Change,
 	return nil
 }
 
+func (c *Coordinator) settleTicketizeCandidate(ctx context.Context, change domain.Change, run domain.AgentRun, result work.PlanningRunCandidate) error {
+	evidence := candidateEvidenceRefs(result)
+	failureClass := candidateFailureClass(change, run, result)
+	if failureClass == string(ErrorClassRuntimeFailed) || failureClass == string(ErrorClassRuntimeTimeout) {
+		failureClass = "generator_failed"
+	}
+	if failureClass != "" {
+		if isTicketizeFencedFailure(failureClass) {
+			if fence, ok := c.state.(work.TicketizeFencePort); ok {
+				if err := fence.FenceTicketizeRun(ctx, run.ID, failureClass); err != nil {
+					return fmt.Errorf("fence ticketize run: %w", err)
+				}
+			}
+			return c.releaseSnapshot(run.ID)
+		}
+		if err := c.failRun(ctx, change, run, failureClass, evidence); err != nil {
+			if errors.Is(err, domain.ErrPlanningRunDeferred) || errors.Is(err, domain.ErrTicketizeFenced) {
+				return c.releaseSnapshot(run.ID)
+			}
+			return err
+		}
+		return c.releaseSnapshot(run.ID)
+	}
+	if result.CandidateRef == nil {
+		return c.failRun(ctx, change, run, string(ErrorClassDecodeInvalid), evidence)
+	}
+	candidateArtifact, err := c.state.FindArtifact(ctx, change.ID, result.CandidateRef.ID)
+	if err != nil {
+		return errors.Join(fmt.Errorf("find ticket draft artifact: %w", err), domain.ErrTicketizeUnavailable)
+	}
+	body, err := c.artifacts.Read(ctx, candidateArtifact.Identity)
+	if err != nil {
+		return errors.Join(fmt.Errorf("read ticket draft artifact: %w", err), domain.ErrTicketizeUnavailable)
+	}
+	candidate, err := DecodeTicketDraft(body)
+	if err != nil {
+		failureClass := classifyCoordinatorError(err)
+		if errors.Is(err, domain.ErrTicketDraftInvalid) {
+			failureClass = "draft_invalid"
+		}
+		if failErr := c.failRun(ctx, change, run, failureClass, evidence); failErr != nil {
+			return errors.Join(err, failErr)
+		}
+		return c.releaseSnapshot(run.ID)
+	}
+	_, planRef, _, err := c.loadTicketizeInput(ctx, change)
+	if err != nil {
+		if errors.Is(err, domain.ErrTicketizeUnavailable) {
+			return err
+		}
+		if failErr := c.failRun(ctx, change, run, classifyCoordinatorError(err), evidence); failErr != nil {
+			return errors.Join(err, failErr)
+		}
+		return c.releaseSnapshot(run.ID)
+	}
+	port, ok := c.state.(work.TicketizeStatePort)
+	if !ok {
+		return fmt.Errorf("complete ticketize: %w", domain.ErrUnavailable)
+	}
+	commit, err := port.CompleteTicketize(ctx, work.TicketizeCompletionRequest{
+		AgentRunID: run.ID, Stage: run.Stage, Attempt: run.Attempt, ExpectedChangeVersion: change.Version,
+		SourceRevision: change.BaseRevision, Actor: planningActor, PlanArtifactRef: planRef, DraftArtifactRef: *result.CandidateRef,
+		Candidate: candidate, RawLogRefs: result.RawLogRefs, GeneratorName: "codex", GeneratorVersion: ticketizeGeneratorV1,
+	})
+	if err != nil {
+		if errors.Is(err, domain.ErrTicketizeFenced) || errors.Is(err, domain.ErrPlanningRunDeferred) {
+			return c.releaseSnapshot(run.ID)
+		}
+		return fmt.Errorf("complete ticketize: %w", err)
+	}
+	if commit.Disposition == work.PlanningCommitCommitted || commit.Disposition == work.PlanningCommitDuplicate || commit.Disposition == work.PlanningCommitFenced {
+		return c.releaseSnapshot(run.ID)
+	}
+	return nil
+}
+
+func isTicketizeFencedFailure(class string) bool {
+	switch class {
+	case "authority_fenced", "change_cancelled", "daemon_restarted", "lease_expired", "lease_revoked", "worker_lost":
+		return true
+	default:
+		return false
+	}
+}
+
 func (c *Coordinator) loadStageInput(ctx context.Context, change domain.Change, stage Stage) (StageInput, domain.ArtifactRef, domain.Artifact, error) {
 	ref, err := c.inputRef(ctx, change, stage)
 	if err != nil {
@@ -468,6 +667,34 @@ func (c *Coordinator) loadStageInput(ctx context.Context, change domain.Change, 
 	}
 	input.Upstream = &upstream
 	return input, ref, artifact, nil
+}
+
+func (c *Coordinator) loadTicketizeInput(ctx context.Context, change domain.Change) (TicketGenerationInput, domain.ArtifactRef, domain.Artifact, error) {
+	ref, err := c.inputRef(ctx, change, StageTicketize)
+	if err != nil {
+		return TicketGenerationInput{}, domain.ArtifactRef{}, domain.Artifact{}, errors.Join(err, domain.ErrTicketizeUnavailable)
+	}
+	artifact, err := c.state.FindArtifact(ctx, change.ID, ref.ID)
+	if err != nil {
+		return TicketGenerationInput{}, ref, domain.Artifact{}, errors.Join(err, domain.ErrTicketizeUnavailable)
+	}
+	body, err := c.artifacts.Read(ctx, artifact.Identity)
+	if err != nil {
+		return TicketGenerationInput{}, ref, artifact, errors.Join(err, domain.ErrTicketizeUnavailable)
+	}
+	primaryInputs := ref.InputArtifactRefIDs
+	if len(primaryInputs) > 1 {
+		primaryInputs = primaryInputs[:1]
+	}
+	plan, err := NewStrictDecoder(nil).DecodeCandidate(body, CandidateExpectation{Stage: StagePlan, SourceRevision: change.BaseRevision, InputArtifactIDs: artifactRefIDStrings(primaryInputs)})
+	if err != nil {
+		return TicketGenerationInput{}, ref, artifact, err
+	}
+	planPayload, ok := plan.Plan()
+	if !ok {
+		return TicketGenerationInput{}, ref, artifact, planningError(ErrorClassSchemaInvalid, "plan")
+	}
+	return TicketGenerationInput{BaseRevision: change.BaseRevision, Plan: planPayload, PlanArtifactID: string(ref.ID), ProjectContext: ProjectContext{SchemaVersion: ProjectContextSchemaV1, ProjectID: string(change.ProjectID), RepositoryName: filepath.Base(change.RepositoryRoot)}}, ref, artifact, nil
 }
 
 func newStageInput(change domain.Change, stage Stage, refID domain.ArtifactRefID) StageInput {
@@ -529,6 +756,8 @@ func (c *Coordinator) inputRef(ctx context.Context, change domain.Change, stage 
 	schema := UnderstandingSchemaV1
 	if stage == StagePlan {
 		kind, schema = ArtifactKindDesign, DesignSchemaV1
+	} else if stage == StageTicketize {
+		kind, schema = ArtifactKindPlan, PlanSchemaV1
 	}
 	refs, err := c.state.ListArtifactRefs(ctx, change.ID)
 	if err != nil {
@@ -670,6 +899,8 @@ func targetStage(checkpoint domain.LifecycleStage) (Stage, bool) {
 		return StageDesign, true
 	case domain.LifecycleStageDesign:
 		return StagePlan, true
+	case domain.LifecycleStageTicketize:
+		return StageTicketize, true
 	default:
 		return "", false
 	}
@@ -684,6 +915,9 @@ func inputKind(stage Stage) string {
 	}
 	if stage == StageDesign {
 		return string(ArtifactKindUnderstanding)
+	}
+	if stage == StageTicketize {
+		return string(ArtifactKindPlan)
 	}
 	return string(ArtifactKindDesign)
 }

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -275,6 +276,31 @@ func TestArtifactRefDTOJSON(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			assertJSONRoundTrip(t, tt.input, tt.want)
 		})
+	}
+}
+
+func TestTicketGraphReadModelJSONHidesGenerationKeyAndExecutionFields(t *testing.T) {
+	input := TicketGraphReadModel{
+		GraphID: "0199daba-7777-7000-8000-000000000010", ChangeID: "0199daba-7777-7000-8000-000000000011", ProjectID: "0199daba-7777-7000-8000-000000000012",
+		BaseRevision: "0123456789abcdef0123456789abcdef01234567", TicketizeAgentRunID: "0199daba-7777-7000-8000-000000000013", GeneratorName: "codex", GeneratorVersion: "ticketize.v1", CreatedAt: "2026-09-08T00:00:00Z",
+		Tickets: []CanonicalTicketDTO{{TicketID: "0199daba-7777-7000-8000-000000000014", Ordinal: 1, Title: "Ticket", Scope: "scope", AcceptanceCriteria: []string{"done"}}},
+	}
+	encoded, err := json.Marshal(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(encoded)
+	for _, forbidden := range []string{"generation_key", "execution_state", "lease_token", "workspace_path"} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("TicketGraphReadModel contains forbidden field %q: %s", forbidden, text)
+		}
+	}
+	var decoded TicketGraphReadModel
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded.GraphID != input.GraphID || len(decoded.Tickets) != 1 || decoded.Tickets[0].AcceptanceCriteria[0] != "done" {
+		t.Fatalf("decoded graph = %+v", decoded)
 	}
 }
 

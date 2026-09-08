@@ -1,4 +1,4 @@
-// Package workstore 提供 Project Bootstrap 的 SQLite 持久化适配器。
+// Package workstore 提供 Work/Planning/Ticket Graph 的 SQLite 持久化适配器。
 package workstore
 
 import (
@@ -57,6 +57,7 @@ func Migrations() []migration.Migration {
 		changeMigration(),
 		workerMigration(),
 		planningMigration(),
+		ticketGraphMigration(),
 	}
 }
 

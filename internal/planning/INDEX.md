@@ -3,9 +3,11 @@
 ## 当前状态
 
 该目录已实现 Ticket 07 的 Planning Contract、Context、严格 decoder/validator、Stage
-Strategy、prompt、fake-friendly Runtime/clock seam 和 Coordinator。Coordinator 只依赖
-Work authority、Artifact、Snapshot 与 Dispatcher 端口，不包含 HTTP、SQL、SQLite 或
-Codex concrete 调用。
+Strategy、prompt、fake-friendly Runtime/clock seam 和 Coordinator，并扩展 Ticket 08 的
+StructuredTicketDraft、Ticketize prompt、Draft validator 与 Ticketize Coordinator 路径。
+Coordinator 只依赖 Work authority、Artifact、Snapshot 与 Dispatcher 端口，不包含 HTTP、
+SQL、SQLite 或 Codex concrete 调用；Canonical Graph 的权威持久化由 `internal/workstore`
+负责。
 
 ## 文件地图
 
@@ -17,9 +19,11 @@ Codex concrete 调用。
 | `validator.go` | ProjectContext、三阶段 payload、revision、数组、文本和路径不变量 |
 | `strategy.go` | Stage 定义、纯 Prepare/Decode、fake Runtime/clock seam 和执行观察事实 |
 | `prompt.go` | 只含授权输入的确定性 Runtime prompt 构造 |
-| `coordinator.go` | 耐久恢复、阶段串行、ProjectContext 复用、candidate 校验、失败收敛和 Snapshot 生命周期 |
-| `integration_test.go` | 真实 SQLite Workstore 与 Artifact Store 上的三阶段串行、Worker candidate 和 Coordinator 重启恢复纵切测试 |
-| `*_test.go` | Contract/decoder/validator/strategy 的纯单元测试，以及 Coordinator 恢复与 fencing 测试 |
+| `ticket_draft.go` | StructuredTicketDraft 严格 decoder/validator、Ticketize 输入、prompt 和 Candidate 序列化 |
+| `coordinator.go` | 阶段串行、Ticketize 输入/只读 Snapshot、candidate 校验、专用 Graph completion、失败收敛和恢复 |
+| `integration_test.go` | 真实 SQLite Workstore 与 Artifact Store 上的三阶段串行、Ticketize Graph、Worker candidate 和 Coordinator 重启恢复纵切测试 |
+| `ticket_draft_test.go` | Draft 合法形状、边界、重复/尾随/UTF-8/依赖环和 prompt 安全性测试 |
+| `*_test.go` | Contract/decoder/validator/strategy 的纯单元测试，以及 Coordinator 恢复、Graph 和 fencing 测试 |
 | `AGENTS.md` | Planning package 的局部修改规约 |
 | `INDEX.md` | 当前文件、职责和验证入口 |
 
@@ -45,6 +49,8 @@ Strategy.Execute（纯测试便利 seam）
 - 07-03：`docs/FE20260903080401/tickets/07-understand-design-plan/tickets/03-planning-coordinator-and-artifact-persistence.md`
 - 07-04：`docs/FE20260903080401/tickets/07-understand-design-plan/tickets/04-isolated-snapshot-and-daemon-recovery.md`
 - 07-05：`docs/FE20260903080401/tickets/07-understand-design-plan/tickets/05-ticket07-integration-verification-and-navigation.md`
+- 08 共同规格：`docs/FE20260903080401/tickets/08-ticketize-canonical-graph/spec/08-ticketize-canonical-graph-spec.md`
+- 08-01 至 08-04：`docs/FE20260903080401/tickets/08-ticketize-canonical-graph/tickets/`
 
 ## 验证入口
 

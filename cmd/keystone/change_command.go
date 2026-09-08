@@ -24,11 +24,23 @@ func (c *cli) newChangeCommand() *cobra.Command {
 	change.AddCommand(c.newChangeCreateCommand())
 	change.AddCommand(c.newChangeListCommand())
 	change.AddCommand(c.newChangeShowCommand())
+	change.AddCommand(c.newChangeTicketGraphCommand())
 	change.AddCommand(c.newChangeControlCommand("pause"))
 	change.AddCommand(c.newChangeControlCommand("resume"))
 	change.AddCommand(c.newChangeControlCommand("cancel"))
 	change.AddCommand(c.newChangeDecisionCommand())
 	return change
+}
+
+func (c *cli) newChangeTicketGraphCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "ticket-graph CHANGE_ID",
+		Short: "查看 Change 的 Canonical Ticket Graph",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return c.changeTicketGraph(cmd.Context(), cmd.OutOrStdout(), args[0])
+		},
+	}
 }
 
 func (c *cli) newChangeCreateCommand() *cobra.Command {
@@ -159,6 +171,21 @@ func (c *cli) changeShow(ctx context.Context, out io.Writer, changeID string) er
 		return err
 	}
 	response, err := c.client().changeShow(ctx, metadata.Endpoint, changeID)
+	if err != nil {
+		return err
+	}
+	return writeJSONOutput(out, response)
+}
+
+func (c *cli) changeTicketGraph(ctx context.Context, out io.Writer, changeID string) error {
+	if err := controlplane.ValidateChangeID(changeID); err != nil {
+		return newCLIError(ErrorChangeFailed, "change_id 无效", err)
+	}
+	metadata, err := readRuntimeMetadata(c.paths)
+	if err != nil {
+		return err
+	}
+	response, err := c.client().changeTicketGraph(ctx, metadata.Endpoint, changeID)
 	if err != nil {
 		return err
 	}

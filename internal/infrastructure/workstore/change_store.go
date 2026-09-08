@@ -541,6 +541,17 @@ func (s *Store) ApplyCommand(ctx context.Context, changeID domain.ChangeID, comm
 	if err := updateChangeStatus(ctx, tx, change, updated, updatedAt); err != nil {
 		return change, err
 	}
+	if command == "pause" || command == "cancel" {
+		if err := fenceTicketizeRunTx(ctx, tx, change, command, updatedAt); err != nil {
+			return change, err
+		}
+		if updated.LatestAgentRun != nil && updated.LatestAgentRun.Stage == domain.LifecycleStageTicketize && updated.LatestAgentRun.Status == domain.AgentRunStatusRunning {
+			fenced := *updated.LatestAgentRun
+			completed := updatedAt
+			fenced.Status, fenced.Outcome, fenced.CompletedAt = domain.AgentRunStatusCompleted, domain.AgentRunOutcomeFailed, &completed
+			updated.LatestAgentRun = &fenced
+		}
+	}
 	eventType := map[string]string{"pause": domain.ChangePausedType, "resume": domain.ChangeResumedType, "cancel": domain.ChangeCancelledType}[command]
 	if err := s.insertEvent(ctx, tx, change.ProjectID, change.ID, eventType, actor, updatedAt, nil, nil, nil); err != nil {
 		return change, err
@@ -553,6 +564,21 @@ func (s *Store) ApplyCommand(ctx context.Context, changeID domain.ChangeID, comm
 	}
 	committed = true
 	return updated, nil
+}
+
+func fenceTicketizeRunTx(ctx context.Context, tx *sql.Tx, change domain.Change, reason string, completed time.Time) error {
+	run := change.LatestAgentRun
+	if run == nil || run.Stage != domain.LifecycleStageTicketize || run.Status != domain.AgentRunStatusRunning {
+		return nil
+	}
+	result, err := tx.ExecContext(ctx, `UPDATE t_agent_runs SET status = 'completed', outcome = 'failed', completed_at = ? WHERE agent_run_id = ? AND status = 'running'`, stamp(completed), run.ID)
+	if err != nil {
+		return fmt.Errorf("fence ticketize agent run: %w", err)
+	}
+	if err := checkVersionUpdate(result); err != nil {
+		return err
+	}
+	return insertEventTx(ctx, tx, change.ProjectID, change.ID, domain.AgentRunCompletedType, "ticketize_fence:"+reason, completed, &run.ID, nil, agentRunArtifactRefIDs(run.Artifacts))
 }
 
 // ApplyDecision 持久化 HumanDecision；legacy retry 立即创建 run，Planning retry 由 Coordinator 显式启动目标 stage。
@@ -790,17 +816,31 @@ func (s *Store) ListChangeEvents(ctx context.Context, changeID domain.ChangeID) 
 	if _, err := readChange(ctx, s.db, changeID); err != nil {
 		return nil, err
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT event_id, project_id, change_id, event_sequence, type, occurred_at, actor, agent_run_id, decision_id FROM t_project_events WHERE change_id = ? ORDER BY event_sequence`, changeID)
+	hasGraphColumn := true
+	rows, err := s.db.QueryContext(ctx, `SELECT event_id, project_id, change_id, event_sequence, type, occurred_at, actor, agent_run_id, decision_id, ticket_graph_id FROM t_project_events WHERE change_id = ? ORDER BY event_sequence`, changeID)
 	if err != nil {
-		return nil, fmt.Errorf("list change events: %w", err)
+		if !strings.Contains(err.Error(), "no such column: ticket_graph_id") {
+			return nil, fmt.Errorf("list change events: %w", err)
+		}
+		rows, err = s.db.QueryContext(ctx, `SELECT event_id, project_id, change_id, event_sequence, type, occurred_at, actor, agent_run_id, decision_id FROM t_project_events WHERE change_id = ? ORDER BY event_sequence`, changeID)
+		if err != nil {
+			return nil, fmt.Errorf("list legacy change events: %w", err)
+		}
+		hasGraphColumn = false
 	}
 	events := make([]domain.ChangeEvent, 0)
 	defer rows.Close()
 	for rows.Next() {
 		var event domain.ChangeEvent
-		var eventChangeID, occurred, agentRunID, decisionID sql.NullString
-		if err := rows.Scan(&event.EventID, &event.ProjectID, &eventChangeID, &event.Sequence, &event.Type, &occurred, &event.Actor, &agentRunID, &decisionID); err != nil {
-			return nil, fmt.Errorf("scan change event: %w", err)
+		var eventChangeID, occurred, agentRunID, decisionID, graphID sql.NullString
+		var scanErr error
+		if hasGraphColumn {
+			scanErr = rows.Scan(&event.EventID, &event.ProjectID, &eventChangeID, &event.Sequence, &event.Type, &occurred, &event.Actor, &agentRunID, &decisionID, &graphID)
+		} else {
+			scanErr = rows.Scan(&event.EventID, &event.ProjectID, &eventChangeID, &event.Sequence, &event.Type, &occurred, &event.Actor, &agentRunID, &decisionID)
+		}
+		if scanErr != nil {
+			return nil, fmt.Errorf("scan change event: %w", scanErr)
 		}
 		event.ChangeID = domain.ChangeID(eventChangeID.String)
 		event.OccurredAt, err = parseStamp(occurred.String)
@@ -814,6 +854,10 @@ func (s *Store) ListChangeEvents(ctx context.Context, changeID domain.ChangeID) 
 		if decisionID.Valid {
 			value := domain.HumanDecisionID(decisionID.String)
 			event.DecisionID = &value
+		}
+		if graphID.Valid {
+			value := domain.TicketGraphID(graphID.String)
+			event.TicketGraphID = &value
 		}
 		events = append(events, event)
 	}
@@ -1355,6 +1399,10 @@ func (s *Store) insertEvent(ctx context.Context, tx *sql.Tx, projectID domain.Pr
 }
 
 func insertEventTx(ctx context.Context, tx *sql.Tx, projectID domain.ProjectID, changeID domain.ChangeID, eventType, actor string, occurred time.Time, runID *domain.AgentRunID, decisionID *domain.HumanDecisionID, refs []domain.ArtifactRefID) error {
+	return insertEventWithGraphTx(ctx, tx, projectID, changeID, eventType, actor, occurred, runID, decisionID, nil, refs)
+}
+
+func insertEventWithGraphTx(ctx context.Context, tx *sql.Tx, projectID domain.ProjectID, changeID domain.ChangeID, eventType, actor string, occurred time.Time, runID *domain.AgentRunID, decisionID *domain.HumanDecisionID, graphID *domain.TicketGraphID, refs []domain.ArtifactRefID) error {
 	sequence, err := nextChangeSequence(ctx, tx, changeID)
 	if err != nil {
 		return err
@@ -1367,9 +1415,24 @@ func insertEventTx(ctx context.Context, tx *sql.Tx, projectID domain.ProjectID, 
 	if decisionID != nil {
 		decisionValue = string(*decisionID)
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO t_project_events (event_id, project_id, type, occurred_at, event_sequence, change_id, agent_run_id, decision_id, actor) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, eventID, projectID, eventType, stamp(occurred), sequence, changeID, runValue, decisionValue, actor); err != nil {
+	var graphValue any
+	if graphID != nil {
+		graphValue = string(*graphID)
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO t_project_events (event_id, project_id, type, occurred_at, event_sequence, change_id, agent_run_id, decision_id, ticket_graph_id, actor) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, eventID, projectID, eventType, stamp(occurred), sequence, changeID, runValue, decisionValue, graphValue, actor); err != nil {
+		// v5 的迁移兼容测试和已存在的旧数据库尚未有 graph 列；旧事件
+		// 不携带 Graph 关联，继续使用原字段集合不会改变既有事实。
+		if graphID == nil && strings.Contains(err.Error(), "no column named ticket_graph_id") {
+			if _, legacyErr := tx.ExecContext(ctx, `INSERT INTO t_project_events (event_id, project_id, type, occurred_at, event_sequence, change_id, agent_run_id, decision_id, actor) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, eventID, projectID, eventType, stamp(occurred), sequence, changeID, runValue, decisionValue, actor); legacyErr == nil {
+				return insertEventArtifactRefs(ctx, tx, eventID, refs)
+			}
+		}
 		return fmt.Errorf("insert change event: %w", err)
 	}
+	return insertEventArtifactRefs(ctx, tx, eventID, refs)
+}
+
+func insertEventArtifactRefs(ctx context.Context, tx *sql.Tx, eventID string, refs []domain.ArtifactRefID) error {
 	for ordinal, refID := range refs {
 		if _, err := tx.ExecContext(ctx, `INSERT INTO t_event_artifacts (event_id, artifact_ref_id, ordinal) VALUES (?, ?, ?)`, eventID, refID, ordinal); err != nil {
 			return fmt.Errorf("insert event artifact reference: %w", err)

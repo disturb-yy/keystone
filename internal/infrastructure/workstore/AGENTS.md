@@ -12,7 +12,7 @@
   AgentRun、ArtifactRef 和统一 Event ledger。
 - `AgentRunReportLate` 是统一 `t_project_events` 的追加事件；不得创建 Worker 私有事件账本，
   不得通过 Report 重放覆盖既有终态。
-- Schema v5 只做 additive Planning 扩展；旧 ArtifactRef、AgentRun 和 Lease 的空 metadata/result mode 必须保持可读。
+- Schema v5 只做 additive Planning 扩展；Schema v6 只追加 Canonical Ticket Graph、Ticket、Dependency 和 Event 关联；旧 ArtifactRef、AgentRun、Lease、Event 和 LateReport 数据必须保持可读。
 - 同一 Change 最多一个 running Planning AgentRun。Planning start 使用显式目标 stage、attempt、ChangeVersion 和 source revision 围栏，不提前改写 checkpoint。
 - `planning_candidate` Lease 的首个有效 Report 只追加 candidate/raw-log 事实并消费 Lease；不完成 AgentRun、不追加 stage 事件、不推进 Change。
 - Planning completion 在单一 SQLite 事务内完成 ArtifactRef/link、AgentRun、统一 Event 和条件 checkpoint 推进；非当前 attempt 只能记录 fenced 终态。
@@ -23,3 +23,9 @@
 - Assignment 与 completion 都在事务内重新检查 Change status/version；Pause、Cancel 或
   dispatch fence 不能创建新的 Lease 或推进 Change。调度前失败和 Artifact store 故障也必须
   形成可恢复的 durable candidate，而不是依赖进程内错误缓存。
+- Graph、Ticket、Acceptance Criterion 和 Dependency 只允许在 Ticketize 专用事务中创建，
+  创建后由数据库 trigger 拒绝 update/delete；Ticket/Dependency 通过复合外键保持同图，
+  递归 CTE 拒绝依赖环，`TicketGraphCreated` 通过 Graph 复合外键关联且不形成循环外键。
+- Ticketize completion 必须同时满足 active/Ticketize、当前 AgentRun、同一 source revision、
+  成功 Plan output 和 Ticketize Draft output 来源约束；成功时在同一事务内写 Graph、事件、
+  AgentRun 终态、StageAdvanced 和 Execute checkpoint。

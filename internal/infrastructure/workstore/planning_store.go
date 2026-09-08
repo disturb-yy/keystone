@@ -110,7 +110,33 @@ func (s *Store) ListRecoverablePlanningChanges(ctx context.Context) ([]domain.Ch
 	rows, err := s.db.QueryContext(ctx, `
 SELECT c.change_id
 FROM t_changes c
-WHERE (c.status = 'active' AND c.stage IN ('Intent', 'Understand', 'Design'))
+WHERE (c.status = 'active' AND c.stage IN ('Intent', 'Understand', 'Design', 'Ticketize'))
+   AND (
+       c.stage <> 'Ticketize'
+       OR NOT EXISTS (
+           SELECT 1 FROM t_agent_runs r
+           WHERE r.change_id = c.change_id AND r.stage = 'Ticketize'
+       )
+       OR EXISTS (
+           SELECT 1
+           FROM t_project_events control
+           WHERE control.change_id = c.change_id
+             AND control.type IN ('ChangeResumed', 'HumanDecisionRecorded')
+             AND control.event_sequence > COALESCE((
+                 SELECT MAX(started.event_sequence)
+                 FROM t_project_events started
+                 JOIN t_agent_runs run ON run.agent_run_id = started.agent_run_id
+                 WHERE started.change_id = c.change_id
+                   AND started.type = 'AgentRunStarted'
+                   AND run.stage = 'Ticketize'
+             ), 0)
+             AND (control.type = 'ChangeResumed' OR EXISTS (
+                 SELECT 1 FROM t_human_decisions decision
+                 WHERE decision.decision_id = control.decision_id
+                   AND decision.kind = 'retry'
+             ))
+       )
+   )
    OR EXISTS (
        SELECT 1
        FROM t_agent_runs r
@@ -180,7 +206,7 @@ func (s *Store) FindPlanningRunCandidate(ctx context.Context, runID domain.Agent
 		return candidate, err
 	}
 	for index := range refs {
-		if refs[index].Kind == "candidate" && candidate.CandidateRef == nil {
+		if (refs[index].Kind == "candidate" || refs[index].Kind == "ticket_draft") && candidate.CandidateRef == nil {
 			value := refs[index]
 			candidate.CandidateRef = &value
 			continue
@@ -329,7 +355,7 @@ func validatePlanningStart(request work.StartPlanningRunRequest) error {
 	if request.ChangeID == "" || request.ExpectedChangeVersion < 1 || strings.TrimSpace(request.Actor) == "" || request.SourceRevision == "" {
 		return fmt.Errorf("start planning run: %w", domain.ErrInvalidRequest)
 	}
-	if request.TargetStage != domain.LifecycleStageUnderstand && request.TargetStage != domain.LifecycleStageDesign && request.TargetStage != domain.LifecycleStagePlan {
+	if request.TargetStage != domain.LifecycleStageUnderstand && request.TargetStage != domain.LifecycleStageDesign && request.TargetStage != domain.LifecycleStagePlan && request.TargetStage != domain.LifecycleStageTicketize {
 		return fmt.Errorf("start planning run stage: %w", domain.ErrInvalidRequest)
 	}
 	if len(request.InputArtifactRefIDs)+len(request.InputArtifacts) == 0 {
@@ -353,16 +379,37 @@ func validatePlanningStartFence(ctx context.Context, tx *sql.Tx, change domain.C
 }
 
 func (s *Store) preparePlanningRunInputs(ctx context.Context, tx *sql.Tx, change domain.Change, request work.StartPlanningRunRequest, created time.Time) ([]domain.AgentRunArtifact, error) {
-	refs, err := readArtifactRefs(ctx, tx, change.ID, request.InputArtifactRefIDs)
-	if err != nil {
-		return nil, err
+	var refs []domain.ArtifactRef
+	appendWrites := func() error {
+		for _, input := range request.InputArtifacts {
+			ref, err := insertPlanningArtifactRef(ctx, tx, change, input, domain.ArtifactRoleInput, created)
+			if err != nil {
+				return err
+			}
+			refs = append(refs, ref)
+		}
+		return nil
 	}
-	for _, input := range request.InputArtifacts {
-		ref, err := insertPlanningArtifactRef(ctx, tx, change, input, domain.ArtifactRoleInput, created)
+	// Ticketize 的第一输入必须是 Plan 的同内容 input Ref；它由
+	// StartTicketizeRun 作为 InputArtifact 写入，已有 Context Ref 随后追加。
+	if request.TargetStage == domain.LifecycleStageTicketize {
+		if err := appendWrites(); err != nil {
+			return nil, err
+		}
+		inputRefs, err := readArtifactRefs(ctx, tx, change.ID, request.InputArtifactRefIDs)
 		if err != nil {
 			return nil, err
 		}
-		refs = append(refs, ref)
+		refs = append(refs, inputRefs...)
+	} else {
+		var err error
+		refs, err = readArtifactRefs(ctx, tx, change.ID, request.InputArtifactRefIDs)
+		if err != nil {
+			return nil, err
+		}
+		if err := appendWrites(); err != nil {
+			return nil, err
+		}
 	}
 	seen := make(map[domain.ArtifactRefID]struct{}, len(refs))
 	artifacts := make([]domain.AgentRunArtifact, 0, len(refs))
@@ -439,7 +486,8 @@ func validatePlanningRunIdentity(run domain.AgentRun, stage domain.LifecycleStag
 func planningTargetFollows(checkpoint, target domain.LifecycleStage) bool {
 	return (checkpoint == domain.LifecycleStageIntent && target == domain.LifecycleStageUnderstand) ||
 		(checkpoint == domain.LifecycleStageUnderstand && target == domain.LifecycleStageDesign) ||
-		(checkpoint == domain.LifecycleStageDesign && target == domain.LifecycleStagePlan)
+		(checkpoint == domain.LifecycleStageDesign && target == domain.LifecycleStagePlan) ||
+		(checkpoint == domain.LifecycleStageTicketize && target == domain.LifecycleStageTicketize)
 }
 
 func planningOutcomeRole(outcome string) string {
@@ -660,6 +708,11 @@ func (s *Store) persistPlanningCandidateReport(ctx context.Context, tx *sql.Tx, 
 		return workercontract.ReportResponse{}, err
 	}
 	if err := storePreparedReportArtifacts(ctx, prepared, artifacts); err != nil {
+		if run.Stage == domain.LifecycleStageTicketize {
+			// Ticketize 的候选尚未形成任何权威成功或失败事实；内容存储
+			// 暂不可用时回滚本次事务，保留 Lease 让同一 Report 可重送。
+			return workercontract.ReportResponse{}, fmt.Errorf("store ticketize report artifacts: %w", ErrWorkerUnavailable)
+		}
 		return s.persistPlanningArtifactFailureCandidate(ctx, tx, request, digest, run, change, lease, eligible)
 	}
 	now := s.now().UTC()
@@ -780,7 +833,15 @@ func insertPlanningCandidateRefs(ctx context.Context, tx *sql.Tx, change domain.
 	stableCandidateFirst(ordered)
 	refs := make([]domain.ArtifactRef, 0, len(ordered))
 	for _, item := range ordered {
-		write := work.PlanningArtifactWrite{Identity: item.identity, MediaType: mediaTypeForWorkerArtifact(item.request.Kind), Kind: item.request.Kind, SourceRevision: run.SourceRevision}
+		kind := item.request.Kind
+		schemaVersion := ""
+		summary := ""
+		if item.request.Kind == "candidate" && run.Stage == domain.LifecycleStageTicketize {
+			kind = "ticket_draft"
+			schemaVersion = "keystone.ticket-draft.v1"
+			summary = "Ticket Draft candidate"
+		}
+		write := work.PlanningArtifactWrite{Identity: item.identity, MediaType: mediaTypeForWorkerArtifact(item.request.Kind), Kind: kind, SchemaVersion: schemaVersion, Summary: summary, SourceRevision: run.SourceRevision}
 		if item.request.Kind == "candidate" {
 			write.InputArtifactRefIDs = append([]domain.ArtifactRefID(nil), inputs...)
 		}

@@ -134,6 +134,21 @@ func (c *daemonHTTPClient) changeShow(ctx context.Context, endpoint string, chan
 	return result, nil
 }
 
+func (c *daemonHTTPClient) changeTicketGraph(ctx context.Context, endpoint string, changeID string) (controlplane.TicketGraphReadModel, error) {
+	response, err := c.request(ctx, http.MethodGet, endpoint, "/v1/changes/"+url.PathEscape(changeID)+"/ticket-graph", nil)
+	if err != nil {
+		return controlplane.TicketGraphReadModel{}, err
+	}
+	if response.StatusCode != http.StatusOK {
+		return controlplane.TicketGraphReadModel{}, c.protocolFailure(response, ErrorChangeFailed, "Ticket Graph 查询请求失败")
+	}
+	var result controlplane.TicketGraphReadModel
+	if err := decodeJSONResponse(response, &result); err != nil {
+		return controlplane.TicketGraphReadModel{}, newCLIError(ErrorInvalidResponse, "Ticket Graph 查询 JSON 无效", err)
+	}
+	return result, nil
+}
+
 func (c *daemonHTTPClient) changeCommand(ctx context.Context, endpoint, key, changeID string, payload controlplane.ChangeCommandRequest) (controlplane.ChangeCommandResponse, error) {
 	response, err := c.requestWithHeaders(ctx, http.MethodPost, endpoint, "/v1/changes/"+url.PathEscape(changeID)+"/commands", payload, map[string]string{controlplane.IdempotencyKeyHeader: key})
 	if err != nil {

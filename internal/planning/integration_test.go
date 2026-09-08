@@ -24,7 +24,7 @@ import (
 
 const planningIntegrationRevision = "0123456789012345678901234567890123456789"
 
-func TestPlanningVerticalIntegrationRecoversDurableCandidateAndReachesTicketize(t *testing.T) {
+func TestPlanningVerticalIntegrationRecoversDurableCandidateAndReachesExecute(t *testing.T) {
 	ctx := context.Background()
 	databasePath := filepath.Join(t.TempDir(), "keystone.db")
 	artifactRoot := filepath.Join(t.TempDir(), "artifacts")
@@ -142,18 +142,29 @@ func TestPlanningVerticalIntegrationRecoversDurableCandidateAndReachesTicketize(
 	}
 
 	recoverPlanningIntegration(t, secondCoordinator)
-	if got := len(secondDispatcher.requests); got != len(checkpoints) {
-		t.Fatalf("Ticketize recovery dispatched another Planning run: %d requests", got)
+	if got := len(secondDispatcher.requests); got != len(checkpoints)+1 {
+		t.Fatalf("Ticketize dispatch count = %d, want %d", got, len(checkpoints)+1)
+	}
+	ticketizeRun := findPlanningIntegrationRun(t, secondState, change.ID, domain.LifecycleStageTicketize)
+	if ticketizeRun.Status != domain.AgentRunStatusRunning {
+		t.Fatalf("Ticketize run status = %s, want running", ticketizeRun.Status)
+	}
+	secondDispatcher.reportCandidate(t, secondArtifacts, ticketizeRun, planningIntegrationTicketDraftJSON(t))
+	recoverPlanningIntegration(t, secondCoordinator)
+	assertPlanningIntegrationCheckpoint(t, secondState, change.ID, domain.LifecycleStageExecute)
+	assertCompletedPlanningIntegrationRun(t, findPlanningIntegrationRun(t, secondState, change.ID, domain.LifecycleStageTicketize))
+	if got := len(secondDispatcher.requests); got != len(checkpoints)+1 {
+		t.Fatalf("settled Ticketize dispatch count = %d, want %d", got, len(checkpoints)+1)
 	}
 	if err := secondCoordinator.Close(); err != nil {
 		t.Fatalf("close second Coordinator: %v", err)
 	}
-	if got := secondSnapshots.closedCount(); got != 2 {
-		t.Fatalf("second Coordinator closed snapshots = %d, want 2", got)
+	if got := secondSnapshots.closedCount(); got != 3 {
+		t.Fatalf("second Coordinator closed snapshots = %d, want 3", got)
 	}
 	allRevisions := append(append([]string(nil), firstSnapshots.revisions...), secondSnapshots.revisions...)
-	if len(allRevisions) != 3 {
-		t.Fatalf("materialized snapshots = %d, want 3", len(allRevisions))
+	if len(allRevisions) != 4 {
+		t.Fatalf("materialized snapshots = %d, want 4", len(allRevisions))
 	}
 	for index, revision := range allRevisions {
 		if revision != change.BaseRevision {
@@ -324,15 +335,15 @@ func assertPlanningIntegrationLineage(t *testing.T, state *workstore.Store, arti
 	if err != nil {
 		t.Fatal(err)
 	}
-	if change.Stage != domain.LifecycleStageTicketize || change.Status != domain.ChangeStatusActive || change.Version != 4 {
-		t.Fatalf("final Change = %+v, want Ticketize/active version 4", change)
+	if change.Stage != domain.LifecycleStageExecute || change.Status != domain.ChangeStatusActive || change.Version != 5 {
+		t.Fatalf("final Change = %+v, want Execute/active version 5", change)
 	}
 	runs, err := state.ListAgentRuns(ctx, change.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(runs) != 3 || len(dispatches) != 3 {
-		t.Fatalf("runs/dispatches = %d/%d, want 3/3", len(runs), len(dispatches))
+	if len(runs) != 4 || len(dispatches) != 4 {
+		t.Fatalf("runs/dispatches = %d/%d, want 4/4", len(runs), len(dispatches))
 	}
 
 	refs, err := state.ListArtifactRefs(ctx, change.ID)
@@ -362,8 +373,9 @@ func assertPlanningIntegrationLineage(t *testing.T, state *workstore.Store, arti
 
 	wantStages := []Stage{StageUnderstand, StageDesign, StagePlan}
 	wantPrimary := change.Intent.ID
-	for index, run := range runs {
-		stage := wantStages[index]
+	var planOutput domain.ArtifactRef
+	for index, stage := range wantStages {
+		run := runs[index]
 		if run.Stage != lifecycleStage(stage) || run.SourceRevision != change.BaseRevision {
 			t.Fatalf("run %d stage/revision = %s/%s", index, run.Stage, run.SourceRevision)
 		}
@@ -380,7 +392,7 @@ func assertPlanningIntegrationLineage(t *testing.T, state *workstore.Store, arti
 		if !ok {
 			t.Fatalf("missing contract for %s", stage)
 		}
-		outputs := planningIntegrationRefsByKind(refs, string(kind))
+		outputs := planningIntegrationOutputRefsByKind(refs, string(kind))
 		if len(outputs) != 1 {
 			t.Fatalf("%s authority outputs = %d, want 1", stage, len(outputs))
 		}
@@ -389,6 +401,9 @@ func assertPlanningIntegrationLineage(t *testing.T, state *workstore.Store, arti
 			t.Fatalf("%s output lineage = %+v", stage, output)
 		}
 		wantPrimary = output.ID
+		if stage == StagePlan {
+			planOutput = output
+		}
 		candidate, err := state.FindPlanningRunCandidate(ctx, run.ID)
 		if err != nil || candidate.CandidateRef == nil || len(candidate.RawLogRefs) != 1 {
 			t.Fatalf("%s durable candidate = %+v, err=%v", stage, candidate, err)
@@ -399,8 +414,59 @@ func assertPlanningIntegrationLineage(t *testing.T, state *workstore.Store, arti
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(events) != 10 || events[len(events)-1].Type != domain.StageAdvancedType {
+	ticketizeRun := runs[3]
+	assertCompletedPlanningIntegrationRun(t, ticketizeRun)
+	if ticketizeRun.Stage != domain.LifecycleStageTicketize {
+		t.Fatalf("Ticketize run = %+v", ticketizeRun)
+	}
+	ticketizeInputs := planningIntegrationRunInputs(ticketizeRun)
+	if len(ticketizeInputs) != 2 || ticketizeInputs[0] == planOutput.ID || ticketizeInputs[1] != contextRef.ID {
+		t.Fatalf("Ticketize run inputs = %v, want copied Plan input and Context input", ticketizeInputs)
+	}
+	planInputRef, err := state.ListArtifactRefs(ctx, change.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var copiedPlanInput domain.ArtifactRef
+	for _, ref := range planInputRef {
+		if ref.ID == ticketizeInputs[0] {
+			copiedPlanInput = ref
+			break
+		}
+	}
+	if copiedPlanInput.Role != domain.ArtifactRoleInput || copiedPlanInput.Kind != "plan" || copiedPlanInput.ArtifactID != planOutput.ArtifactID {
+		t.Fatalf("Ticketize copied Plan input = %+v, want same content as output %+v", copiedPlanInput, planOutput)
+	}
+	ticketizeDispatch := dispatches[3]
+	if ticketizeDispatch.AgentRunID != ticketizeRun.ID || len(ticketizeDispatch.Inputs) != 2 || ticketizeDispatch.Inputs[0].Kind != string(ArtifactKindPlan) || ticketizeDispatch.Inputs[1].Kind != planningContextKind {
+		t.Fatalf("Ticketize dispatch = %+v", ticketizeDispatch)
+	}
+	draftRefs := planningIntegrationOutputRefsByKind(refs, "ticket_draft")
+	if len(draftRefs) != 1 {
+		t.Fatalf("Ticketize draft outputs = %d, want 1", len(draftRefs))
+	}
+	candidate, err := state.FindPlanningRunCandidate(ctx, ticketizeRun.ID)
+	if err != nil || candidate.CandidateRef == nil || candidate.CandidateRef.ID != draftRefs[0].ID || len(candidate.RawLogRefs) != 1 {
+		t.Fatalf("Ticketize durable candidate = %+v, err=%v", candidate, err)
+	}
+	graph, err := state.FindTicketGraph(ctx, change.ID)
+	if err != nil || graph.PlanArtifactRef.ID != planOutput.ID || graph.DraftArtifactRef.ID != draftRefs[0].ID || len(graph.Tickets) != 2 || len(graph.Dependencies) != 1 {
+		t.Fatalf("Ticketize graph = %+v, err=%v", graph, err)
+	}
+	if len(events) != 14 || events[len(events)-1].Type != domain.StageAdvancedType {
 		t.Fatalf("Planning event trace = %+v", events)
+	}
+	var graphEvents int
+	for _, event := range events {
+		if event.Type == domain.TicketGraphCreatedType {
+			graphEvents++
+			if event.TicketGraphID == nil || *event.TicketGraphID != graph.ID {
+				t.Fatalf("TicketGraphCreated event = %+v", event)
+			}
+		}
+	}
+	if graphEvents != 1 {
+		t.Fatalf("TicketGraphCreated events = %d, want 1", graphEvents)
 	}
 	for index, event := range events {
 		if event.Sequence != index+1 {
@@ -423,6 +489,16 @@ func planningIntegrationRefsByKind(refs []domain.ArtifactRef, kind string) []dom
 	selected := make([]domain.ArtifactRef, 0)
 	for _, ref := range refs {
 		if ref.Kind == kind {
+			selected = append(selected, ref)
+		}
+	}
+	return selected
+}
+
+func planningIntegrationOutputRefsByKind(refs []domain.ArtifactRef, kind string) []domain.ArtifactRef {
+	selected := make([]domain.ArtifactRef, 0)
+	for _, ref := range refs {
+		if ref.Role == domain.ArtifactRoleOutput && ref.Kind == kind {
 			selected = append(selected, ref)
 		}
 	}
@@ -463,6 +539,11 @@ func planningIntegrationCandidateJSON(t *testing.T, stage Stage, revision, input
 		t.Fatal(err)
 	}
 	return body
+}
+
+func planningIntegrationTicketDraftJSON(t *testing.T) []byte {
+	t.Helper()
+	return []byte(`{"schema_version":"keystone.ticket-draft.v1","tickets":[{"generation_key":"root","title":"Root ticket","scope":"internal/work","acceptance_criteria":["authority commits the graph"],"blocked_by":[]},{"generation_key":"child","title":"Child ticket","scope":"internal/planning","acceptance_criteria":["draft remains traceable"],"blocked_by":["root"]}]}`)
 }
 
 type planningIntegrationDispatcher struct {
