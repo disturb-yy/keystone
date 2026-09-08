@@ -15,7 +15,7 @@
 | --- | --- | --- |
 | `go.mod` | 模块 `github.com/disturb-yy/keystone`，Go `1.27`，依赖 `golang.org/x/sys` 与 `modernc.org/sqlite` | 已声明，支持 Ticket 02 的跨平台锁和纯 Go SQLite 基线 |
 | `Makefile` | `test`、`build`、`lint`、`dashboard-build` 根级验证入口 | 已存在；Dashboard 目标使用 `package-lock.json` 执行 npm 校验/构建 |
-| `docs/FE20260903080401/` | V1 基线、里程碑、验收清单和版本化 Ticket/规格文档 | 已存在；Ticket 02 的 spec 与 01-05 验收记录已在当前树 |
+| `docs/FE20260903080401/` | V1 基线、里程碑、验收清单和版本化 Ticket/规格文档 | 已存在；Ticket 02 的 spec 与 01-05 验收记录、Ticket 07-10 的规划规格已在当前树；规划不表示后续 M5-M8 已实现 |
 | `CONTEXT.md`、`docs/adr/` | 项目术语与已接受的架构决策 | 已存在；记录 LocalStateRoot、DaemonReadiness 等语义及本机 Daemon 控制边界，不表示 M1 已实现 |
 | `cmd/`、`configs/` | `cmd/keystone`、`cmd/keystone-daemon`、`cmd/keystone-worker` 与 `configs` 的 `.gitkeep` | `init`、Change、Daemon CLI 和独立 Worker 入口已实现 |
 | `internal/infrastructure/` | 基础能力及 `manifest`、`repository`、`artifact`、`workstore` adapter | 已有本机状态、Migration、Git/Manifest、Artifact 和 Project/Change SQLite 持久化能力 |
@@ -81,7 +81,7 @@ Application 位于 Control Plane Daemon 内部；Ticket 04 Project Bootstrap 和
 
 ### L4 — Domain
 
-业务领域以 DDD Lite 组织，`domain/` 是业务强边界。当前 Ticket 04/05 的 `internal/work/` 与 `internal/work/domain/` 以及 Ticket 06 的执行边界已有 Go 实现；`internal/planning/` 仅有 Ticket 07 的局部导航文档，其他目标领域目录仍未创建：
+业务领域以 DDD Lite 组织，`domain/` 是业务强边界。当前 Ticket 04/05 的 `internal/work/` 与 `internal/work/domain/` 以及 Ticket 06 的执行边界已有 Go 实现；`internal/planning/` 仅有 Ticket 07/08 的局部导航与规划文档，其他目标领域目录仍未创建：
 
 | 目标路径 | 逻辑子系统 | 地图中的核心对象 |
 | --- | --- | --- |
@@ -148,7 +148,7 @@ Daemon → contracts/worker → Worker
 | Worker 入口 | `cmd/keystone-worker/` | `internal/worker`、L2 `contracts/worker/`、Workspace、Runtime |
 | 领域对象 | `internal/work/domain/` | Project Bootstrap、Change Lifecycle、Artifact/Event Domain |
 | 用例编排 | `internal/work/` | Project Bootstrap、Change Lifecycle Application |
-| Planning 规格与边界 | `internal/planning/`、`docs/FE20260903080401/tickets/07-understand-design-plan/` | 当前只有局部规约、索引和 Ticket 07 规划文档；无 Planning 运行实现 |
+| Planning/执行规格与边界 | `internal/planning/`、`docs/FE20260903080401/tickets/07-understand-design-plan/`、`docs/FE20260903080401/tickets/08-ticketize-canonical-graph/`、`docs/FE20260903080401/tickets/09-worktree-execute-diff/`、`docs/FE20260903080401/tickets/10-verify-commit-integrate-ready/` | 当前只有局部规约、索引及 Ticket 07-10 规划规格；无 Planning、M7 执行或 M8 Verify/Commit 运行实现 |
 | 持久化或外部适配 | `internal/infrastructure/` | Git/Manifest、Artifact store、Project/Change/Worker workstore、`migrations/` |
 | Ticket 02 实现 | `docs/FE20260903080401/tickets/02-local-state-and-boundary-contracts/` | spec、子 Ticket、localstate/migration/Contract 实现与验收记录 |
 | 运行术语与长期决策 | `CONTEXT.md`、`docs/adr/` | 术语消歧与已接受的本机 Daemon 控制边界 |

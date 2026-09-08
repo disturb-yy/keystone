@@ -45,9 +45,9 @@ Ticket 描述的是已确认的实现契约，不替代 `docs/architecture-basel
 | [05](05-change-lifecycle-artifact-event.md) | M3 | 04 | Change 状态、Artifact 与 Event 由 Daemon 持久化 |
 | [06](06-local-worker-and-codex-runtime.md) | M4 | 05 | Daemon 经本机 Worker 完成真实 Codex smoke run |
 | [07](07-understand-design-plan.md) | M5 | 06 | [规格](07-understand-design-plan/spec/07-understand-design-plan-spec.md)；自动产生可验证的 Understanding、Design、Plan Artifact |
-| [08](08-ticketize-canonical-graph.md) | M6 | 07 | Plan 形成持久化、无环的 Canonical Ticket Graph |
-| [09](09-worktree-execute-diff.md) | M7 | 06、08 | Ticket 在 Change Worktree 内形成独立采集的 Diff |
-| [10](10-verify-commit-integrate-ready.md) | M8 | 09 | 独立 Verify、Keystone Commit 与 Integrate Ready |
+| [08](08-ticketize-canonical-graph.md) | M6 | 07 | [规格](08-ticketize-canonical-graph/spec/08-ticketize-canonical-graph-spec.md)；[实施子票](08-ticketize-canonical-graph/tickets/)；Plan 形成持久化、无环的 Canonical Ticket Graph |
+| [09](09-worktree-execute-diff.md) | M7 | 06、08 | [规格](09-worktree-execute-diff/spec/09-worktree-execute-diff-spec.md)；Ticket 在 Change Worktree 内形成独立采集的 Diff |
+| [10](10-verify-commit-integrate-ready.md) | M8 | 09 | [规格](10-verify-commit-integrate-ready/spec/10-verify-commit-integrate-ready-spec.md)；[实施子票](10-verify-commit-integrate-ready/tickets/)；独立 Verify、Keystone Commit 与 Integrate Ready |
 | [11](11-dashboard-observation.md) | M9 | 10 | Dashboard 观察权威状态与 Trace |
 | [12](12-golden-path-e2e.md) | M9 | 11 | 真实 Golden Path 的可复盘验收证据 |
 

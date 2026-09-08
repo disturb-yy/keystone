@@ -27,7 +27,7 @@
 - 四个页面可在 Daemon 托管的生产构建中访问并展示 Query API 的数据。
 - SSE 丢失或浏览器刷新后，页面重新查询仍与 Daemon 状态一致。
 - Dashboard 只能提交定义的 Command/Decision，不能写 DB 或自行推进 Lifecycle。
-- Human Required Change 在界面中可定位、查看证据并提交追加式 Decision。
+- Human Required Change 在界面中可定位、查看证据并提交追加式 Decision。 
 
 ## 验证
 
