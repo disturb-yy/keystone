@@ -8,6 +8,7 @@
 - `BLOCKED_BY`：11
 - 交付类型：最终可复盘验收
 - 实施规格：[12-golden-path-e2e-spec.md](12-golden-path-e2e/spec/12-golden-path-e2e-spec.md)
+- 实施子票：[12-golden-path-e2e/tickets/](12-golden-path-e2e/tickets/)
 
 ## 目标
 
