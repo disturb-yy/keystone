@@ -1,0 +1,31 @@
+{
+  "name": "Keystone Architecture",
+  "version": "0.1",
+  "language": "zh-CN",
+  "status": "architecture-direction-aligned",
+  "lifecycle": [
+    "Intent",
+    "Understand",
+    "Design",
+    "Plan",
+    "Ticketize",
+    "Execute",
+    "Verify",
+    "Integrate",
+    "Learn"
+  ],
+  "subsystems": [
+    "Work & Lifecycle",
+    "Intelligence & Planning",
+    "Governance",
+    "Orchestration & Execution",
+    "Traceability & Learning"
+  ],
+  "v1": {
+    "architecture": "Local-first Modular Monolith Control Plane + 独立 Worker",
+    "repository": "Monorepo",
+    "dashboard": "Local Web UI",
+    "workspace": "Git Worktree 默认实现",
+    "strategy": "Thin Vertical Slice"
+  }
+}
