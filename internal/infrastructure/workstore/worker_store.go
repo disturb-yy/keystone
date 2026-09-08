@@ -249,6 +249,9 @@ func (s *Store) AvailableWorker(ctx context.Context, capability string) (string,
 	if ctx == nil || strings.TrimSpace(capability) == "" {
 		return "", false, fmt.Errorf("find available worker: %w", domain.ErrInvalidRequest)
 	}
+	if err := s.reconcileExpiredExecutionLeases(ctx); err != nil {
+		return "", false, err
+	}
 	now := stamp(s.now().UTC())
 	if _, err := s.db.ExecContext(ctx, `UPDATE t_worker_leases SET state = 'expired', workspace_path = CASE WHEN result_mode = 'planning_candidate' THEN '' ELSE workspace_path END WHERE state = 'active' AND expires_at <= ?`, now); err != nil {
 		return "", false, fmt.Errorf("expire worker leases: %w", ErrWorkerUnavailable)
@@ -284,6 +287,9 @@ func (s *Store) AvailableWorker(ctx context.Context, capability string) (string,
 func (s *Store) HeartbeatWorker(ctx context.Context, request workercontract.Heartbeat) (workercontract.HeartbeatResponse, error) {
 	if err := request.Validate(); err != nil {
 		return workercontract.HeartbeatResponse{}, fmt.Errorf("heartbeat worker: %w", ErrWorkerNotRegistered)
+	}
+	if err := s.reconcileExpiredExecutionLeases(ctx); err != nil {
+		return workercontract.HeartbeatResponse{}, err
 	}
 	now := s.now().UTC()
 	if request.AgentRunID == "" {
@@ -526,6 +532,9 @@ func (s *Store) PullAssignment(ctx context.Context, workerID string) (*workercon
 	if strings.TrimSpace(workerID) == "" {
 		return nil, ErrWorkerNotRegistered
 	}
+	if err := s.reconcileExpiredExecutionLeases(ctx); err != nil {
+		return nil, err
+	}
 	now := s.now().UTC()
 	if _, err := s.db.ExecContext(ctx, `UPDATE t_worker_leases SET state = 'expired', workspace_path = CASE WHEN result_mode = 'planning_candidate' THEN '' ELSE workspace_path END WHERE worker_id = ? AND state = 'active' AND expires_at <= ?`, workerID, stamp(now)); err != nil {
 		return nil, fmt.Errorf("expire worker leases: %w", ErrWorkerUnavailable)
@@ -533,11 +542,11 @@ func (s *Store) PullAssignment(ctx context.Context, workerID string) (*workercon
 	if err := s.forgetTerminalLeaseTokens(ctx); err != nil {
 		return nil, err
 	}
-	var leaseID, agentRunID, state, expires, workspaceID, workspacePath, runtime, resultMode, instruction, beforeRevision, inputJSON string
-	var attempt int
-	err := s.db.QueryRowContext(ctx, `SELECT lease_id, agent_run_id, state, expires_at, workspace_id, workspace_path, runtime, result_mode, instruction, before_revision, attempt, input_artifacts_json FROM t_worker_leases WHERE worker_id = ? AND state = 'active' ORDER BY created_at, lease_id LIMIT 1`, workerID).Scan(&leaseID, &agentRunID, &state, &expires, &workspaceID, &workspacePath, &runtime, &resultMode, &instruction, &beforeRevision, &attempt, &inputJSON)
+	var leaseID, agentRunID, state, expires, workspaceID, workspacePath, runtime, resultMode, executionMode, instruction, beforeRevision, inputJSON string
+	var attempt, timeoutSeconds int
+	err := s.db.QueryRowContext(ctx, `SELECT lease_id, agent_run_id, state, expires_at, workspace_id, workspace_path, runtime, result_mode, execution_mode, instruction, before_revision, attempt, timeout_seconds, input_artifacts_json FROM t_worker_leases WHERE worker_id = ? AND state = 'active' ORDER BY created_at, lease_id LIMIT 1`, workerID).Scan(&leaseID, &agentRunID, &state, &expires, &workspaceID, &workspacePath, &runtime, &resultMode, &executionMode, &instruction, &beforeRevision, &attempt, &timeoutSeconds, &inputJSON)
 	if errors.Is(err, sqlErrNoRows()) {
-		return nil, nil
+		return s.IssueNextExecutionAssignment(ctx, workerID)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("read worker assignment: %w", ErrWorkerUnavailable)
@@ -560,11 +569,73 @@ func (s *Store) PullAssignment(ctx context.Context, workerID string) (*workercon
 		WorkspacePath:  workspacePath,
 		Runtime:        runtime,
 		ResultMode:     resultMode,
+		ExecutionMode:  executionMode,
+		TimeoutSeconds: timeoutSeconds,
 		Instruction:    instruction,
 		BeforeRevision: beforeRevision,
 		Attempt:        attempt,
 		InputArtifacts: inputs,
 	}, nil
+}
+
+// ClaimExecution 原子绑定唯一 RuntimeClaim；重复提交同一 Claim 只返回 duplicate。
+func (s *Store) ClaimExecution(ctx context.Context, workerID string, request workercontract.ClaimRequest) (workercontract.ClaimResponse, error) {
+	if ctx == nil || strings.TrimSpace(workerID) == "" {
+		return workercontract.ClaimResponse{}, ErrWorkerUnauthorized
+	}
+	if err := request.Validate(); err != nil {
+		return workercontract.ClaimResponse{}, ErrWorkerReportInvalid
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return workercontract.ClaimResponse{}, fmt.Errorf("begin runtime claim: %w", ErrWorkerUnavailable)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+	var leaseID, leaseWorker, tokenDigest, state, currentClaim, claimState, expiresAt, executionMode string
+	err = tx.QueryRowContext(ctx, `SELECT lease_id, worker_id, token_sha256, state, runtime_claim_id, claim_state, expires_at, execution_mode FROM t_worker_leases WHERE agent_run_id = ?`, request.AgentRunID).Scan(&leaseID, &leaseWorker, &tokenDigest, &state, &currentClaim, &claimState, &expiresAt, &executionMode)
+	if errors.Is(err, sql.ErrNoRows) {
+		return workercontract.ClaimResponse{}, ErrWorkerLeaseInvalid
+	}
+	if err != nil {
+		return workercontract.ClaimResponse{}, fmt.Errorf("read runtime claim lease: %w", ErrWorkerUnavailable)
+	}
+	if leaseWorker != workerID || subtle.ConstantTimeCompare([]byte(tokenDigest), []byte(hashSecret(request.LeaseToken))) != 1 || executionMode != "edit" {
+		return workercontract.ClaimResponse{}, ErrWorkerLeaseInvalid
+	}
+	deadline, deadlineErr := parseStamp(expiresAt)
+	if state != "active" || deadlineErr != nil || !s.now().UTC().Before(deadline) {
+		return workercontract.ClaimResponse{}, ErrWorkerLeaseInvalid
+	}
+	if claimState == "claimed" || currentClaim != "" {
+		if currentClaim == request.RuntimeClaimID && claimState == "claimed" {
+			if err := tx.Commit(); err != nil {
+				return workercontract.ClaimResponse{}, fmt.Errorf("commit duplicate runtime claim: %w", ErrWorkerUnavailable)
+			}
+			committed = true
+			return workercontract.ClaimResponse{Disposition: "duplicate", AgentRunID: request.AgentRunID, RuntimeClaimID: currentClaim, LeaseExpiresAt: expiresAt}, nil
+		}
+		return workercontract.ClaimResponse{}, ErrWorkerAssignmentConflict
+	}
+	var claimedCount int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM t_worker_leases WHERE worker_id = ? AND state = 'active' AND claim_state = 'claimed'`, workerID).Scan(&claimedCount); err != nil {
+		return workercontract.ClaimResponse{}, fmt.Errorf("inspect worker runtime claims: %w", ErrWorkerUnavailable)
+	}
+	if claimedCount != 0 {
+		return workercontract.ClaimResponse{}, ErrWorkerAssignmentConflict
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE t_worker_leases SET runtime_claim_id = ?, claim_state = 'claimed' WHERE lease_id = ? AND state = 'active' AND claim_state = ''`, request.RuntimeClaimID, leaseID); err != nil {
+		return workercontract.ClaimResponse{}, fmt.Errorf("persist runtime claim: %w", ErrWorkerUnavailable)
+	}
+	if err := tx.Commit(); err != nil {
+		return workercontract.ClaimResponse{}, fmt.Errorf("commit runtime claim: %w", ErrWorkerUnavailable)
+	}
+	committed = true
+	return workercontract.ClaimResponse{Disposition: "claimed", AgentRunID: request.AgentRunID, RuntimeClaimID: request.RuntimeClaimID, LeaseExpiresAt: expiresAt}, nil
 }
 
 // ReportWorker 校验独立证据并原子完成 AgentRun、ArtifactRef、Lease 和 Event。
@@ -641,7 +712,11 @@ func (s *Store) reportWorker(ctx context.Context, workerID string, request worke
 	if run.IsPlanning() != (lease.ResultMode == workercontract.ResultModePlanningCandidate) {
 		return workercontract.ReportResponse{}, ErrWorkerReportInvalid
 	}
-	if !planningCandidateMode && reportHasCaptureFailures(request) {
+	ticketID, authorizationID, sessionID, epochID, executionRun, executionInfoErr := executionRunInfo(ctx, tx, run.ID)
+	if executionInfoErr != nil {
+		return workercontract.ReportResponse{}, fmt.Errorf("read execution report identity: %w", ErrWorkerUnavailable)
+	}
+	if !planningCandidateMode && reportHasCaptureFailures(request) && !executionRun {
 		return workercontract.ReportResponse{}, fmt.Errorf("worker evidence capture failed: %w", ErrWorkerUnavailable)
 	}
 	if lease.State == "consumed" {
@@ -686,6 +761,9 @@ func (s *Store) reportWorker(ctx context.Context, workerID string, request worke
 		if !currentRun {
 			current = false
 		}
+	}
+	if executionRun && current {
+		return s.persistExecutionReport(ctx, tx, request, digest, prepared, run, change, lease, artifacts, ticketID, authorizationID, sessionID, epochID)
 	}
 	if !current {
 		if lease.State == "active" {
@@ -814,6 +892,240 @@ func (s *Store) reportWorker(ctx context.Context, workerID string, request worke
 	return workercontract.ReportResponse{Disposition: disposition, AgentRunID: request.AgentRunID, LeaseState: "consumed"}, nil
 }
 
+func executionRunInfo(ctx context.Context, tx *sql.Tx, runID domain.AgentRunID) (ticketID, authorizationID, sessionID, epochID string, execution bool, err error) {
+	err = tx.QueryRowContext(ctx, `SELECT state.ticket_id, state.authorization_id, authorization.session_id, authorization.epoch_id FROM t_ticket_execution_states state JOIN t_execution_authorizations authorization ON authorization.authorization_id = state.authorization_id WHERE state.agent_run_id = ?`, runID).Scan(&ticketID, &authorizationID, &sessionID, &epochID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", "", "", "", false, nil
+	}
+	if err != nil {
+		return "", "", "", "", false, err
+	}
+	return ticketID, authorizationID, sessionID, epochID, true, nil
+}
+
+type executionSnapshotRecord struct {
+	ID            string
+	Phase         string
+	InputRevision string
+	HeadRevision  string
+	Branch        string
+	ChangedFiles  []string
+	DiffSHA256    string
+	DiffBytes     int64
+	HasUntracked  bool
+}
+
+func readExecutionSnapshot(ctx context.Context, tx *sql.Tx, sessionID, ticketID, phase string) (executionSnapshotRecord, bool, error) {
+	var record executionSnapshotRecord
+	var changedJSON string
+	var untracked int
+	err := tx.QueryRowContext(ctx, `SELECT snapshot_id, phase, input_revision, head_revision, branch, changed_files_json, diff_sha256, diff_bytes, has_untracked FROM t_workspace_snapshots WHERE session_id = ? AND ticket_id = ? AND phase = ?`, sessionID, ticketID, phase).Scan(&record.ID, &record.Phase, &record.InputRevision, &record.HeadRevision, &record.Branch, &changedJSON, &record.DiffSHA256, &record.DiffBytes, &untracked)
+	if errors.Is(err, sql.ErrNoRows) {
+		return executionSnapshotRecord{}, false, nil
+	}
+	if err != nil {
+		return executionSnapshotRecord{}, false, err
+	}
+	if err := json.Unmarshal([]byte(changedJSON), &record.ChangedFiles); err != nil {
+		return executionSnapshotRecord{}, false, err
+	}
+	record.HasUntracked = untracked != 0
+	return record, true, nil
+}
+
+func preparedArtifact(artifacts []preparedWorkerArtifact, kind string) (preparedWorkerArtifact, bool) {
+	for _, artifact := range artifacts {
+		if artifact.request.Kind == kind {
+			return artifact, true
+		}
+	}
+	return preparedWorkerArtifact{}, false
+}
+
+func validateExecutionEvidence(request workercontract.Report, prepared []preparedWorkerArtifact, pre, post executionSnapshotRecord, hasPre, hasPost bool) bool {
+	if request.Outcome != workercontract.Outcome(domain.AgentRunOutcomeSucceeded) || request.ExitCode == nil || *request.ExitCode != 0 || request.AfterRevision == "" || request.AfterRevision != post.InputRevision || len(request.GuardFindings) != 0 || reportHasCaptureFailures(request) || !hasPre || !hasPost {
+		return false
+	}
+	if pre.InputRevision != post.InputRevision || pre.HeadRevision != pre.InputRevision || post.HeadRevision != post.InputRevision || pre.Branch == "" || post.Branch != pre.Branch || pre.DiffBytes != 0 || len(pre.ChangedFiles) != 0 || pre.HasUntracked || post.HasUntracked || post.DiffBytes <= 0 || len(post.ChangedFiles) == 0 {
+		return false
+	}
+	diff, hasDiff := preparedArtifact(prepared, "diff")
+	changed, hasChanged := preparedArtifact(prepared, "changed_files")
+	if !hasDiff || !hasChanged || diff.request.Truncated || changed.request.Truncated || len(diff.content) == 0 || len(changed.content) == 0 || diff.identity.SHA256 != post.DiffSHA256 || diff.identity.ByteLength != post.DiffBytes {
+		return false
+	}
+	workerFiles := strings.Split(strings.TrimSuffix(string(changed.content), "\n"), "\n")
+	if len(workerFiles) == 1 && workerFiles[0] == "" {
+		return false
+	}
+	if !sameStringSlice(workerFiles, post.ChangedFiles) {
+		return false
+	}
+	return true
+}
+
+func sameStringSlice(left, right []string) bool {
+	left = append([]string(nil), left...)
+	right = append([]string(nil), right...)
+	if len(left) != len(right) {
+		return false
+	}
+	sort.Strings(left)
+	sort.Strings(right)
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
+}
+
+func (s *Store) persistExecutionReport(ctx context.Context, tx *sql.Tx, request workercontract.Report, digest string, prepared []preparedWorkerArtifact, run domain.AgentRun, change domain.Change, lease workerLease, artifacts WorkerArtifactStore, ticketID, authorizationID, sessionID, epochID string) (workercontract.ReportResponse, error) {
+	if containsPreparedWorkerArtifact(prepared, "candidate") {
+		return workercontract.ReportResponse{}, ErrWorkerReportInvalid
+	}
+	pre, hasPre, err := readExecutionSnapshot(ctx, tx, sessionID, ticketID, "pre")
+	if err != nil {
+		return workercontract.ReportResponse{}, fmt.Errorf("read execution pre snapshot: %w", ErrWorkerUnavailable)
+	}
+	post, hasPost, err := readExecutionSnapshot(ctx, tx, sessionID, ticketID, "post")
+	if err != nil {
+		return workercontract.ReportResponse{}, fmt.Errorf("read execution post snapshot: %w", ErrWorkerUnavailable)
+	}
+	if err := storePreparedReportArtifacts(ctx, prepared, artifacts); err != nil {
+		return workercontract.ReportResponse{}, err
+	}
+	valid := validateExecutionEvidence(request, prepared, pre, post, hasPre, hasPost)
+	now := s.now().UTC()
+	outcome := domain.AgentRunOutcomeHumanRequired
+	role := domain.ArtifactRoleFailure
+	if valid {
+		outcome = domain.AgentRunOutcomeSucceeded
+		role = domain.ArtifactRoleOutput
+	}
+	refs, runArtifacts, err := insertWorkerArtifacts(ctx, tx, change, prepared, role, now)
+	if err != nil {
+		return workercontract.ReportResponse{}, fmt.Errorf("persist execution artifacts: %w", ErrWorkerUnavailable)
+	}
+	if err := run.Complete(outcome, now); err != nil {
+		return workercontract.ReportResponse{}, fmt.Errorf("complete execution run: %w", ErrWorkerUnavailable)
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE t_agent_runs SET status = 'completed', outcome = ?, completed_at = ? WHERE agent_run_id = ? AND status = 'running'`, outcome, stamp(now), run.ID); err != nil {
+		return workercontract.ReportResponse{}, fmt.Errorf("complete execution agent run: %w", ErrWorkerUnavailable)
+	}
+	if err := insertAgentRunArtifacts(ctx, tx, run.ID, runArtifacts); err != nil {
+		return workercontract.ReportResponse{}, fmt.Errorf("link execution artifacts: %w", ErrWorkerUnavailable)
+	}
+	diffRef, deltaRef := executionEvidenceRefs(prepared, refs)
+	if valid {
+		changedJSON, marshalErr := json.Marshal(post.ChangedFiles)
+		if marshalErr != nil {
+			return workercontract.ReportResponse{}, fmt.Errorf("encode execution delta: %w", ErrWorkerUnavailable)
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO t_ticket_execution_evidence (evidence_id, session_id, epoch_id, ticket_id, agent_run_id, lease_id, input_revision, pre_snapshot_id, post_snapshot_id, complete_diff_artifact_ref_id, ticket_delta_artifact_ref_id, complete_diff_sha256, changed_files_json, outcome, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'succeeded', ?)`, id.New(), sessionID, epochID, ticketID, run.ID, lease.LeaseID, post.InputRevision, pre.ID, post.ID, diffRef, deltaRef, post.DiffSHA256, string(changedJSON), stamp(now)); err != nil {
+			return workercontract.ReportResponse{}, fmt.Errorf("persist execution evidence: %w", ErrWorkerUnavailable)
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE t_ticket_execution_states SET state = 'succeeded', updated_at = ? WHERE graph_id = (SELECT graph_id FROM t_tickets WHERE ticket_id = ?) AND ticket_id = ? AND agent_run_id = ?`, stamp(now), ticketID, ticketID, run.ID); err != nil {
+			return workercontract.ReportResponse{}, fmt.Errorf("complete execution ticket: %w", ErrWorkerUnavailable)
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE t_execution_authorizations SET status = 'completed', updated_at = ? WHERE authorization_id = ?`, stamp(now), authorizationID); err != nil {
+			return workercontract.ReportResponse{}, fmt.Errorf("complete execution authorization: %w", ErrWorkerUnavailable)
+		}
+	} else {
+		if hasPre && hasPost {
+			changedJSON, marshalErr := json.Marshal(post.ChangedFiles)
+			if marshalErr != nil {
+				return workercontract.ReportResponse{}, fmt.Errorf("encode fenced execution delta: %w", ErrWorkerUnavailable)
+			}
+			if _, err := tx.ExecContext(ctx, `INSERT INTO t_ticket_execution_evidence (evidence_id, session_id, epoch_id, ticket_id, agent_run_id, lease_id, input_revision, pre_snapshot_id, post_snapshot_id, complete_diff_artifact_ref_id, ticket_delta_artifact_ref_id, complete_diff_sha256, changed_files_json, outcome, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'human_required', ?)`, id.New(), sessionID, epochID, ticketID, run.ID, lease.LeaseID, post.InputRevision, pre.ID, post.ID, diffRef, deltaRef, post.DiffSHA256, string(changedJSON), stamp(now)); err != nil {
+				return workercontract.ReportResponse{}, fmt.Errorf("persist fenced execution evidence: %w", ErrWorkerUnavailable)
+			}
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE t_ticket_execution_states SET state = 'human_required', updated_at = ? WHERE graph_id = (SELECT graph_id FROM t_tickets WHERE ticket_id = ?) AND ticket_id = ? AND agent_run_id = ?`, stamp(now), ticketID, ticketID, run.ID); err != nil {
+			return workercontract.ReportResponse{}, fmt.Errorf("fence execution ticket: %w", ErrWorkerUnavailable)
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE t_execution_authorizations SET status = 'human_required', updated_at = ? WHERE authorization_id = ?`, stamp(now), authorizationID); err != nil {
+			return workercontract.ReportResponse{}, fmt.Errorf("fence execution authorization: %w", ErrWorkerUnavailable)
+		}
+	}
+	actor := "worker:" + request.AgentRunID
+	if err := insertEventTx(ctx, tx, change.ProjectID, change.ID, domain.AgentRunCompletedType, actor, now, &run.ID, nil, refs); err != nil {
+		return workercontract.ReportResponse{}, fmt.Errorf("record execution completion: %w", ErrWorkerUnavailable)
+	}
+	disposition := "accepted"
+	if !valid {
+		disposition = "accepted_fenced"
+		if change.Status == domain.ChangeStatusActive {
+			next, transitionErr := change.EnterHumanRequired()
+			if transitionErr != nil {
+				return workercontract.ReportResponse{}, fmt.Errorf("fence execution change: %w", ErrWorkerUnavailable)
+			}
+			next.UpdatedAt = now
+			if err := updateChangeStatus(ctx, tx, change, next, now); err != nil {
+				return workercontract.ReportResponse{}, fmt.Errorf("update execution recovery boundary: %w", ErrWorkerUnavailable)
+			}
+			if err := insertEventTx(ctx, tx, change.ProjectID, change.ID, domain.ChangeHumanRequiredType, actor, now, &run.ID, nil, refs); err != nil {
+				return workercontract.ReportResponse{}, fmt.Errorf("record execution recovery boundary: %w", ErrWorkerUnavailable)
+			}
+		}
+	} else {
+		var pending int
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM t_ticket_execution_states state JOIN t_tickets ticket ON ticket.ticket_id = state.ticket_id JOIN t_ticket_graphs graph ON graph.graph_id = ticket.graph_id WHERE graph.change_id = ? AND state.state IN ('pending', 'assigned')`, change.ID).Scan(&pending); err != nil {
+			return workercontract.ReportResponse{}, fmt.Errorf("read remaining execution tickets: %w", ErrWorkerUnavailable)
+		}
+		if pending == 0 {
+			if _, err := tx.ExecContext(ctx, `UPDATE t_execution_sessions SET status = 'completed', updated_at = ? WHERE session_id = ?`, stamp(now), sessionID); err != nil {
+				return workercontract.ReportResponse{}, fmt.Errorf("complete execution session: %w", ErrWorkerUnavailable)
+			}
+			if _, err := tx.ExecContext(ctx, `UPDATE t_execution_dispatch_epochs SET status = 'completed' WHERE epoch_id = ?`, epochID); err != nil {
+				return workercontract.ReportResponse{}, fmt.Errorf("complete execution epoch: %w", ErrWorkerUnavailable)
+			}
+		} else {
+			newEpoch := id.New()
+			if _, err := tx.ExecContext(ctx, `INSERT INTO t_execution_dispatch_epochs (epoch_id, session_id, sequence, status, created_at) SELECT ?, session_id, sequence + 1, 'queued', ? FROM t_execution_dispatch_epochs WHERE epoch_id = ?`, newEpoch, stamp(now), epochID); err != nil {
+				return workercontract.ReportResponse{}, fmt.Errorf("queue next execution epoch: %w", ErrWorkerUnavailable)
+			}
+			if _, err := tx.ExecContext(ctx, `UPDATE t_execution_dispatch_epochs SET status = 'completed' WHERE epoch_id = ?`, epochID); err != nil {
+				return workercontract.ReportResponse{}, fmt.Errorf("complete execution epoch: %w", ErrWorkerUnavailable)
+			}
+			if _, err := tx.ExecContext(ctx, `UPDATE t_execution_sessions SET status = 'waiting', current_epoch_id = ?, updated_at = ? WHERE session_id = ?`, newEpoch, stamp(now), sessionID); err != nil {
+				return workercontract.ReportResponse{}, fmt.Errorf("queue execution session: %w", ErrWorkerUnavailable)
+			}
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE t_worker_leases SET state = 'consumed', consumed_at = ?, report_digest = ?, report_disposition = ?, report_outcome = ? WHERE lease_id = ? AND state = 'active'`, stamp(now), digest, disposition, outcome, lease.LeaseID); err != nil {
+		return workercontract.ReportResponse{}, fmt.Errorf("consume execution lease: %w", ErrWorkerUnavailable)
+	}
+	if err := insertWorkerReportReceipt(ctx, tx, digest, request.AgentRunID, lease.LeaseID, lease.WorkerID, disposition, "", outcome, now); err != nil {
+		return workercontract.ReportResponse{}, fmt.Errorf("record execution report receipt: %w", ErrWorkerUnavailable)
+	}
+	if err := tx.Commit(); err != nil {
+		return workercontract.ReportResponse{}, fmt.Errorf("commit execution report: %w", ErrWorkerUnavailable)
+	}
+	s.forgetLeaseToken(lease.LeaseID)
+	return workercontract.ReportResponse{Disposition: disposition, AgentRunID: request.AgentRunID, LeaseState: "consumed"}, nil
+}
+
+func executionEvidenceRefs(prepared []preparedWorkerArtifact, refs []domain.ArtifactRefID) (string, string) {
+	var diffOrdinal, changedOrdinal = -1, -1
+	for index, item := range prepared {
+		switch item.request.Kind {
+		case "diff":
+			diffOrdinal = index
+		case "changed_files":
+			changedOrdinal = index
+		}
+	}
+	var diffRef, changedRef string
+	if diffOrdinal >= 0 && diffOrdinal < len(refs) {
+		diffRef = string(refs[diffOrdinal])
+	}
+	if changedOrdinal >= 0 && changedOrdinal < len(refs) {
+		changedRef = string(refs[changedOrdinal])
+	}
+	return diffRef, changedRef
+}
+
 // ReconcilePlanningExecutions 只把超时 Planning Lease 标记为失效，不据此推断 Runtime 已停止。
 // Worker 的 late Report、Supervisor 的进程退出或 Daemon restart 才能形成可收敛候选。
 func (s *Store) ReconcilePlanningExecutions(ctx context.Context) error {
@@ -902,6 +1214,9 @@ func (s *Store) ReconcileWorkerRestart(ctx context.Context) error {
 		}
 		actor := "daemon_restarted"
 		if err := insertEventTx(ctx, tx, change.ProjectID, change.ID, domain.AgentRunCompletedType, actor, now, &run.ID, nil, nil); err != nil {
+			return err
+		}
+		if err := fenceExecutionRunTx(ctx, tx, run.ID, now); err != nil {
 			return err
 		}
 		if change.Status == domain.ChangeStatusActive {
@@ -995,6 +1310,9 @@ func (s *Store) ReconcileWorkerLost(ctx context.Context, workerID string) error 
 		}
 		actor := "worker_lost"
 		if err := insertEventTx(ctx, tx, change.ProjectID, change.ID, domain.AgentRunCompletedType, actor, now, &run.ID, nil, nil); err != nil {
+			return err
+		}
+		if err := fenceExecutionRunTx(ctx, tx, run.ID, now); err != nil {
 			return err
 		}
 		if change.Status == domain.ChangeStatusActive {
@@ -1291,19 +1609,24 @@ func validateArtifactSummary(summary workercontract.ArtifactSummary) error {
 }
 
 func insertWorkerArtifacts(ctx context.Context, tx *sql.Tx, change domain.Change, prepared []preparedWorkerArtifact, role string, now time.Time) ([]domain.ArtifactRefID, []domain.AgentRunArtifact, error) {
+	var next int
+	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(ordinal), -1) + 1 FROM t_artifact_refs WHERE change_id = ? AND role = ?`, change.ID, role).Scan(&next); err != nil {
+		return nil, nil, err
+	}
 	refs := make([]domain.ArtifactRefID, 0, len(prepared))
 	runArtifacts := make([]domain.AgentRunArtifact, 0, len(prepared))
-	for ordinal, item := range prepared {
+	for _, item := range prepared {
 		stored, err := ensureArtifact(ctx, tx, item.identity, mediaTypeForWorkerArtifact(item.request.Kind), now)
 		if err != nil {
 			return nil, nil, err
 		}
-		ref := domain.ArtifactRef{ID: domain.ArtifactRefID(id.New()), ChangeID: change.ID, ArtifactID: stored.ID, Role: role, Ordinal: ordinal}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO t_artifact_refs (artifact_ref_id, project_id, change_id, artifact_id, role, ordinal, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`, ref.ID, change.ProjectID, change.ID, stored.ID, role, ordinal, stamp(now)); err != nil {
+		ref := domain.ArtifactRef{ID: domain.ArtifactRefID(id.New()), ChangeID: change.ID, ArtifactID: stored.ID, Role: role, Ordinal: next}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO t_artifact_refs (artifact_ref_id, project_id, change_id, artifact_id, role, ordinal, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`, ref.ID, change.ProjectID, change.ID, stored.ID, role, next, stamp(now)); err != nil {
 			return nil, nil, err
 		}
 		refs = append(refs, ref.ID)
-		runArtifacts = append(runArtifacts, domain.AgentRunArtifact{ArtifactRefID: ref.ID, Role: role, Ordinal: ordinal})
+		runArtifacts = append(runArtifacts, domain.AgentRunArtifact{ArtifactRefID: ref.ID, Role: role, Ordinal: next})
+		next++
 	}
 	return refs, runArtifacts, nil
 }

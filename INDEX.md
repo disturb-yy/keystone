@@ -18,14 +18,14 @@
 | `docs/FE20260903080401/` | V1 基线、里程碑、验收清单和版本化 Ticket/规格文档 | 已存在；Ticket 02 验收记录与 Ticket 07 spec/01-05 子票均在当前树 |
 | `CONTEXT.md`、`docs/adr/` | 项目术语与已接受的架构决策 | 已存在；记录 LocalStateRoot、DaemonReadiness 等语义及本机 Daemon 控制边界，不表示 M1 已实现 |
 | `cmd/`、`configs/` | `cmd/keystone`、`cmd/keystone-daemon`、`cmd/keystone-worker` 与 `configs` 的 `.gitkeep` | `init`、Change、Daemon CLI 和独立 Worker 入口已实现 |
-| `internal/infrastructure/` | 基础能力及 `manifest`、`repository`、`artifact`、`workstore` adapter | 已有本机状态、Migration、Git/Manifest、固定 revision Snapshot、Artifact 和 Project/Change/Worker/Planning SQLite 持久化能力 |
+| `internal/infrastructure/` | 基础能力及 `manifest`、`repository`、`sourcecontrol`、`artifact`、`workstore` adapter | 已有本机状态、Migration、Git/Manifest、固定 revision Snapshot、受约束 Worktree、Artifact 和 Project/Change/Worker/Planning/Ticket Graph/Execution SQLite 持久化能力 |
 | `contracts/controlplane/` | `/v1` 版本前缀、错误 envelope、Daemon/Project/Change/Artifact/AgentRun DTO、`Idempotency-Key` | 已落地 JSON Contract package；HTTP Handler 位于 `internal/daemon` |
-| `contracts/worker/` | Register、Heartbeat、Pull、Assignment、Report、Artifact 与 `planning_candidate` 传输 DTO | 已落地严格 JSON Contract；HTTP/authority 位于 Daemon/Work Store |
+| `contracts/worker/` | Register、Heartbeat、Pull、Claim、Assignment、Report、Artifact 与 `planning_candidate` 传输 DTO | 已落地严格 JSON Contract；HTTP/authority 位于 Daemon/Work Store |
 | `docs/architecture-baseline/` | 架构参考目录 | 当前工作树不存在；目标架构文字不作为运行行为证据 |
 | `dashboard/` | React、TypeScript、Vite 源码、`package.json` 与 `package-lock.json` | 已有可构建骨架，无业务页面 |
 | `migrations/`、`scripts/` | 根级路径尚不存在 | Migration runner 位于 `internal/infrastructure/migration/`；Ticket 04/05 业务 Migration 由 `workstore` 提供 |
 
-当前工作树已有基础 `.go`、Ticket 02 基础设施、Ticket 04 Project Bootstrap、Ticket 05 Change Lifecycle/Artifact/Event、Ticket 06 本机 Worker/Runtime seam 和 Ticket 07 只读 Planning 纵切；Ticket Graph 和后续生产调度仍未实现。Ticket 06 的真实 Codex/原生 Windows 验收仍是独立证据缺口。`.agents/`、`.codex/` 和 `.idea/` 属于工作区或 IDE 工具目录，不纳入项目架构导航。
+当前工作树已有基础 `.go`、Ticket 02 基础设施、Ticket 04 Project Bootstrap、Ticket 05 Change Lifecycle/Artifact/Event、Ticket 06 本机 Worker/Runtime seam、Ticket 07 只读 Planning、Ticket 08 Canonical Ticket Graph 和 Ticket 09 Worktree Execute/Diff 纵切；Ticket 10 及后续 Verify/Commit/Integrate 仍未实现。Ticket 06 的真实 Codex/原生 Windows 验收，以及 Ticket 09 的真实 Codex、跨平台和端到端人工验收仍是独立证据缺口。`.agents/`、`.codex/` 和 `.idea/` 属于工作区或 IDE 工具目录，不纳入项目架构导航。
 
 ## Architecture Map
 
@@ -70,7 +70,7 @@ Human
 
 ### L3 — Application
 
-Application 位于 Control Plane Daemon 内部；Ticket 04 Project Bootstrap 和 Ticket 05 Change Lifecycle Application 位于 `internal/work/`，Ticket 06 Worker Protocol/Lease/Report 由 Daemon 与 Work Store 的 authority seam 组合，Ticket 07 Coordinator 位于 `internal/planning/` 并由 Daemon 生命周期驱动。
+Application 位于 Control Plane Daemon 内部；Ticket 04 Project Bootstrap 和 Ticket 05 Change Lifecycle Application 位于 `internal/work/`，Ticket 06 Worker Protocol/Lease/Report 由 Daemon 与 Work Store 的 authority seam 组合，Ticket 07 Coordinator 位于 `internal/planning/` 并由 Daemon 生命周期驱动，Ticket 09 Execute 用例位于 `internal/execution/application/`，其 Worktree、Scheduler、Claim 和 Evidence authority 由 Daemon/Work Store 组合。
 
 - Lifecycle Coordinator：推进 Change 的宏观 Lifecycle Stage。
 - Scheduler：从 Effective Ticket Graph 的 READY Frontier 选择 Runnable Work。
@@ -88,7 +88,7 @@ Application 位于 Control Plane Daemon 内部；Ticket 04 Project Bootstrap 和
 | `internal/work/`、`internal/work/domain/` | Work & Lifecycle | 当前已创建；Project Bootstrap、Change Lifecycle、Artifact/Event Domain 与 Application |
 | `internal/planning/` | Intelligence & Planning | 已实现 ProjectContext、Understanding/Design/Plan Contract、Strategy、strict decoder/validator 与 Coordinator；Ticket Generation 尚未实现 |
 | `internal/governance/` | Governance | 尚未创建；Policy、Risk、Gate、Evidence、Decision、Escalation |
-| `internal/execution/` | Orchestration & Execution | 已创建 RuntimeAdapter、Codex Adapter、Evidence capture 和 ExecutionGuard；Frontier、Scheduler、Execution DAG 尚未实现 |
+| `internal/execution/` | Orchestration & Execution | 已实现 RuntimeAdapter、Codex Adapter、Evidence capture、ExecutionGuard、Worktree Execute/Diff domain/application；Scheduler 与 Ticket Graph authority 位于 `workstore` |
 | `internal/traceability/` | Traceability & Learning | 尚未创建；Artifact Lineage、Domain Event、Execution Trace、Eval、Incident |
 
 五个逻辑子系统是横向职责边界，不拆成五个微服务；Lifecycle 是纵向主流程：
@@ -101,7 +101,7 @@ Intent → Understand → Design → Plan → Ticketize → Execute → Verify �
 
 | 目标路径 | 地图位置 | 当前状态 |
 | --- | --- | --- |
-| `internal/infrastructure/` | `config`、`logging`、`id`、`localstate`、`migration`、`manifest`、`repository`、`artifact`、`workstore` | 基础能力、Git/Manifest、隔离 Snapshot、Artifact store、Project/Change/Worker/Planning authority SQLite adapter |
+| `internal/infrastructure/` | `config`、`logging`、`id`、`localstate`、`migration`、`manifest`、`repository`、`sourcecontrol`、`artifact`、`workstore` | 基础能力、Git/Manifest、Planning Snapshot、受约束 Git Worktree、Artifact store、Project/Change/Worker/Planning/Ticket Graph/Execution authority SQLite adapter |
 | `internal/infrastructure/localstate/` | 数据根、目录初始化、跨平台单实例锁和运行元数据 | 已落地；不拥有 Daemon 生命周期或业务状态 |
 | `internal/infrastructure/migration/` | 纯 Go SQLite `t_schema_migrations` runner | 已落地；只增量、事务应用、重复跳过和漂移失败 |
 | `migrations/` | 根级数据库 Schema / Migration 文件 | 当前未创建；Ticket 04/05 业务 Migration 由 `internal/infrastructure/workstore` 提供 |
@@ -149,7 +149,7 @@ Daemon → contracts/worker → Worker
 | 领域对象 | `internal/work/domain/` | Project Bootstrap、Change Lifecycle、Artifact/Event Domain |
 | 用例编排 | `internal/work/` | Project Bootstrap、Change Lifecycle Application |
 | Planning 实现与规格 | `internal/planning/`、`docs/FE20260903080401/tickets/07-understand-design-plan/` | Contract/Strategy/Coordinator、五张实施子票和共同规格；Daemon 接线见 `internal/daemon/planning.go` |
-| 持久化或外部适配 | `internal/infrastructure/` | Git/Manifest、Artifact store、Project/Change/Worker workstore、`migrations/` |
+| 持久化或外部适配 | `internal/infrastructure/` | Git/Manifest、受约束 Worktree、Artifact store、Project/Change/Worker/Ticket Graph/Execution workstore、`migrations/` |
 | Ticket 02 实现 | `docs/FE20260903080401/tickets/02-local-state-and-boundary-contracts/` | spec、子 Ticket、localstate/migration/Contract 实现与验收记录 |
 | 运行术语与长期决策 | `CONTEXT.md`、`docs/adr/` | 术语消歧与已接受的本机 Daemon 控制边界 |
 
@@ -170,5 +170,5 @@ Daemon → contracts/worker → Worker
 - 生成日期：`2026-09-08`。
 - Graphify 输出、CodeMap 输出和 MCP 代码地图：当前未发现。
 - `CONTEXT.md` 与 `docs/adr/0001-local-daemon-control-plane.md` 记录本机 Daemon 控制边界；Ticket 04/05 的实际代码以当前 checkout 为准。
-- `Makefile` 提供根级验证入口；`dashboard/`、`contracts/{controlplane,worker}/`、Daemon、Project/Change HTTP/CLI、Worker Protocol/authority、`internal/{worker,execution,planning}` 与 `internal/infrastructure/{config,logging,id,localstate,migration,manifest,repository,artifact,workstore}/` 已落地。`migrations/`、`scripts/`、Ticket Graph 和生产 Ticket scheduler 仍未创建。
+- `Makefile` 提供根级验证入口；`dashboard/`、`contracts/{controlplane,worker}/`、Daemon、Project/Change HTTP/CLI、Worker Protocol/authority、`internal/{worker,execution,planning}` 与 `internal/infrastructure/{config,logging,id,localstate,migration,manifest,repository,sourcecontrol,artifact,workstore}/` 已落地。`migrations/`、`scripts/` 和 Ticket 10 之后的生产链仍未创建。
 - 新增实现、创建目标目录或刷新架构 / 代码地图后，本索引需要重新对齐。

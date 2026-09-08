@@ -74,6 +74,13 @@ func (c *Client) Pull(ctx context.Context, request workercontract.PullRequest) (
 	return response, err
 }
 
+// Claim 在启动 Runtime 前向 Daemon 申请不可复用的启动资格。
+func (c *Client) Claim(ctx context.Context, request workercontract.ClaimRequest) (workercontract.ClaimResponse, error) {
+	var response workercontract.ClaimResponse
+	err := c.do(ctx, http.MethodPost, "/worker/v1/claim", request, &response)
+	return response, err
+}
+
 // Report 提交一次执行事实；调用方负责在 unavailable 时重发同一请求。
 func (c *Client) Report(ctx context.Context, request workercontract.Report) (workercontract.ReportResponse, error) {
 	var response workercontract.ReportResponse

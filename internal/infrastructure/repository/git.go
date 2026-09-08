@@ -16,20 +16,22 @@ import (
 type Git struct {
 	// SnapshotBase 指定 Daemon 持有的 Planning Snapshot 父目录；空值仅供独立调用使用系统临时目录。
 	SnapshotBase string
+	// GitPath 允许集成测试或受控运行时指定 Git 可执行文件；空值使用 PATH 中的 git。
+	GitPath string
 }
 
 // Snapshot 连续读取两次干净状态和 HEAD，确认 Change 的 BaseRevision 稳定。
 //
 // 该方法只执行 Git 读命令，不创建锁，也不改变 Repository 内容。
-func (Git) Snapshot(ctx context.Context, root string) (domain.ChangeSourceSnapshot, error) {
+func (g Git) Snapshot(ctx context.Context, root string) (domain.ChangeSourceSnapshot, error) {
 	if ctx == nil || root == "" || !filepath.IsAbs(root) || filepath.Clean(root) != root {
 		return domain.ChangeSourceSnapshot{}, fmt.Errorf("snapshot repository: %w", domain.ErrInvalidRequest)
 	}
-	first, err := readSnapshotPoint(ctx, root)
+	first, err := g.readSnapshotPoint(ctx, root)
 	if err != nil {
 		return domain.ChangeSourceSnapshot{}, err
 	}
-	second, err := readSnapshotPoint(ctx, root)
+	second, err := g.readSnapshotPoint(ctx, root)
 	if err != nil {
 		return domain.ChangeSourceSnapshot{}, err
 	}
@@ -40,7 +42,7 @@ func (Git) Snapshot(ctx context.Context, root string) (domain.ChangeSourceSnapsh
 }
 
 // Discover 将调用路径解析为物理 RepositoryBinding。
-func (Git) Discover(ctx context.Context, path string) (domain.RepositoryBinding, error) {
+func (g Git) Discover(ctx context.Context, path string) (domain.RepositoryBinding, error) {
 	if ctx == nil {
 		return domain.RepositoryBinding{}, fmt.Errorf("discover repository: %w", domain.ErrInvalidRequest)
 	}
@@ -51,15 +53,15 @@ func (Git) Discover(ctx context.Context, path string) (domain.RepositoryBinding,
 	if err != nil || !info.IsDir() {
 		return domain.RepositoryBinding{}, fmt.Errorf("discover repository: %w", domain.ErrRepositoryUnsupported)
 	}
-	bare, err := gitOutput(ctx, path, "rev-parse", "--is-bare-repository")
+	bare, err := g.gitOutput(ctx, path, "rev-parse", "--is-bare-repository")
 	if err != nil || strings.TrimSpace(bare) == "true" {
 		return domain.RepositoryBinding{}, fmt.Errorf("discover repository: %w", domain.ErrRepositoryUnsupported)
 	}
-	inside, err := gitOutput(ctx, path, "rev-parse", "--is-inside-work-tree")
+	inside, err := g.gitOutput(ctx, path, "rev-parse", "--is-inside-work-tree")
 	if err != nil || strings.TrimSpace(inside) != "true" {
 		return domain.RepositoryBinding{}, fmt.Errorf("discover repository: %w", domain.ErrRepositoryUnsupported)
 	}
-	rootText, err := gitOutput(ctx, path, "rev-parse", "--show-toplevel")
+	rootText, err := g.gitOutput(ctx, path, "rev-parse", "--show-toplevel")
 	if err != nil {
 		return domain.RepositoryBinding{}, fmt.Errorf("discover repository: %w", domain.ErrRepositoryUnsupported)
 	}
@@ -71,7 +73,7 @@ func (Git) Discover(ctx context.Context, path string) (domain.RepositoryBinding,
 	if err != nil {
 		return domain.RepositoryBinding{}, fmt.Errorf("normalize repository root: %w", domain.ErrRepositoryUnsupported)
 	}
-	if err := rejectLinkedWorktree(ctx, root); err != nil {
+	if err := g.rejectLinkedWorktree(ctx, root); err != nil {
 		return domain.RepositoryBinding{}, err
 	}
 	binding := domain.RepositoryBinding{Root: root, ManifestPath: filepath.Join(root, ".keystone", "project.yaml")}
@@ -99,8 +101,12 @@ func (Git) RootExists(ctx context.Context, path string) (bool, error) {
 	return false, fmt.Errorf("stat previous repository root: %w", err)
 }
 
-func gitOutput(ctx context.Context, path string, args ...string) (string, error) {
-	command := exec.CommandContext(ctx, "git", append([]string{"-C", path}, args...)...)
+func (g Git) gitOutput(ctx context.Context, path string, args ...string) (string, error) {
+	gitPath := g.GitPath
+	if strings.TrimSpace(gitPath) == "" {
+		gitPath = "git"
+	}
+	command := exec.CommandContext(ctx, gitPath, append([]string{"-C", path}, args...)...)
 	env := make([]string, 0, len(os.Environ())+1)
 	for _, value := range os.Environ() {
 		if strings.HasPrefix(value, "GIT_OPTIONAL_LOCKS=") {
@@ -116,15 +122,15 @@ func gitOutput(ctx context.Context, path string, args ...string) (string, error)
 	return string(output), nil
 }
 
-func readSnapshotPoint(ctx context.Context, root string) (string, error) {
-	status, err := gitOutput(ctx, root, "status", "--porcelain=v1", "--untracked-files=all", "--ignore-submodules=none")
+func (g Git) readSnapshotPoint(ctx context.Context, root string) (string, error) {
+	status, err := g.gitOutput(ctx, root, "status", "--porcelain=v1", "--untracked-files=all", "--ignore-submodules=none")
 	if err != nil {
 		return "", fmt.Errorf("read repository status: %w", domain.ErrUnavailable)
 	}
 	if strings.TrimSpace(status) != "" {
 		return "", fmt.Errorf("repository has uncommitted changes: %w", domain.ErrRepositoryDirty)
 	}
-	head, err := gitOutput(ctx, root, "rev-parse", "--verify", "HEAD^{commit}")
+	head, err := g.gitOutput(ctx, root, "rev-parse", "--verify", "HEAD^{commit}")
 	if err != nil {
 		return "", fmt.Errorf("resolve repository HEAD: %w", domain.ErrBaseRevisionUnavailable)
 	}
@@ -147,7 +153,7 @@ func validGitOID(value string) bool {
 	return true
 }
 
-func rejectLinkedWorktree(ctx context.Context, root string) error {
+func (g Git) rejectLinkedWorktree(ctx context.Context, root string) error {
 	gitPath := filepath.Join(root, ".git")
 	info, err := os.Lstat(gitPath)
 	if err != nil {
@@ -156,7 +162,7 @@ func rejectLinkedWorktree(ctx context.Context, root string) error {
 	if !info.Mode().IsRegular() {
 		return nil
 	}
-	gitDir, err := gitOutput(ctx, root, "rev-parse", "--git-dir")
+	gitDir, err := g.gitOutput(ctx, root, "rev-parse", "--git-dir")
 	if err != nil || strings.Contains(filepath.ToSlash(strings.TrimSpace(gitDir)), "/worktrees/") {
 		return fmt.Errorf("linked worktree is unsupported: %w", domain.ErrRepositoryUnsupported)
 	}

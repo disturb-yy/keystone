@@ -545,11 +545,25 @@ func (s *Store) ApplyCommand(ctx context.Context, changeID domain.ChangeID, comm
 		if err := fenceTicketizeRunTx(ctx, tx, change, command, updatedAt); err != nil {
 			return change, err
 		}
+		if err := fenceExecutionTx(ctx, tx, change, command, updatedAt); err != nil {
+			return change, err
+		}
+		if updated.LatestAgentRun != nil && updated.LatestAgentRun.Stage == domain.LifecycleStageExecute && updated.LatestAgentRun.Status == domain.AgentRunStatusRunning {
+			fenced, readErr := readAgentRun(ctx, tx, updated.LatestAgentRun.ID)
+			if readErr != nil {
+				return change, readErr
+			}
+			updated.LatestAgentRun = &fenced
+		}
 		if updated.LatestAgentRun != nil && updated.LatestAgentRun.Stage == domain.LifecycleStageTicketize && updated.LatestAgentRun.Status == domain.AgentRunStatusRunning {
 			fenced := *updated.LatestAgentRun
 			completed := updatedAt
 			fenced.Status, fenced.Outcome, fenced.CompletedAt = domain.AgentRunStatusCompleted, domain.AgentRunOutcomeFailed, &completed
 			updated.LatestAgentRun = &fenced
+		}
+	} else if command == "resume" {
+		if err := resumeExecutionTx(ctx, tx, change.ID, updatedAt); err != nil {
+			return change, err
 		}
 	}
 	eventType := map[string]string{"pause": domain.ChangePausedType, "resume": domain.ChangeResumedType, "cancel": domain.ChangeCancelledType}[command]
@@ -636,7 +650,15 @@ func (s *Store) ApplyDecision(ctx context.Context, changeID domain.ChangeID, dec
 		return change, err
 	}
 	if decision == domain.HumanDecisionRetry {
-		if change.LatestAgentRun == nil || !change.LatestAgentRun.IsPlanning() {
+		executionSession, executionErr := hasExecutionSession(ctx, tx, change.ID)
+		if executionErr != nil {
+			return change, executionErr
+		}
+		if executionSession {
+			if err := retryExecutionTx(ctx, tx, change.ID, created); err != nil {
+				return change, err
+			}
+		} else if change.LatestAgentRun == nil || !change.LatestAgentRun.IsPlanning() {
 			run, runErr := insertAgentRun(ctx, tx, change.ProjectID, change.ID, change.Stage, created, nil)
 			if runErr != nil {
 				return change, runErr
@@ -647,6 +669,9 @@ func (s *Store) ApplyDecision(ctx context.Context, changeID domain.ChangeID, dec
 			}
 		}
 	} else if decision == domain.HumanDecisionCancel {
+		if err := fenceExecutionTx(ctx, tx, change, "cancel", created); err != nil {
+			return change, err
+		}
 		if err := s.insertEvent(ctx, tx, change.ProjectID, change.ID, domain.ChangeCancelledType, actor, created, nil, nil, nil); err != nil {
 			return change, err
 		}

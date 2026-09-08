@@ -27,6 +27,8 @@ SQLite 行为；这些行为由 `internal/daemon` 负责。
 | `ProjectEventsResponse` | `GET /v1/projects/{project_id}/events` 的 ProjectInitialized 列表 |
 | `ChangeCreateRequest` / `ChangeCreateResponse` | `POST /v1/changes` 的创建边界 |
 | `ChangeListResponse` / `ChangeCommandResponse` | Change 列表、快照和 Pause/Resume/Cancel 成功响应 |
+| `ChangeExecuteRequest` / `ChangeExecuteResponse` | `POST /v1/changes/{change_id}/execute` 的幂等 Execute 接受响应 |
+| `ExecutionReadModel` / `ExecutionTicketDTO` | `GET /v1/changes/{change_id}/execution` 的安全执行状态查询 |
 | `HumanDecisionRequest` / `HumanDecisionResponse` | retry/cancel 人工恢复决定 |
 | `ChangeEventsResponse` / `ChangeRunsResponse` | Event 和 AgentRun Trace；AgentRun 可选返回 run kind 与固定 source revision |
 | `ChangeArtifactsResponse` / `ChangeDecisionsResponse` | ArtifactRef 和 HumanDecision Trace；ArtifactRef 可选返回 Planning kind、schema、summary、source revision 与输入/raw-log 关联 |
@@ -41,7 +43,7 @@ cmd/keystone → contracts/controlplane → internal/daemon HTTP Handler
 `dashboard/` 当前仍是前端骨架，没有已落地的业务 API 调用；它是该边界的
 目标客户端。`internal/daemon/` 注册并实现 `/healthz`、
 `/v1/daemon/status`、`/v1/daemon/stop`、`/v1/projects/init`、Project Query、
-以及 `/v1/changes` Change Lifecycle 路由，但不把 Handler 或 SQLite 代码放入
+以及 `/v1/changes` Change Lifecycle、Execute/Execution 路由，但不把 Handler 或 SQLite 代码放入
 本 package。
 
 ## 明确边界

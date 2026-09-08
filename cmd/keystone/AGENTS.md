@@ -10,7 +10,7 @@
 - 在 `start` 中发现并启动独立的 `keystone-daemon`，在有界时间内确认 readiness。
 - 在 `init` 中归一化当前目录、复用 Daemon ensure seam，并通过 loopback API
   提交 Project 初始化；CLI 不读取 Manifest 或 SQLite。
-- 通过 Control Plane API 暴露 Change create/list/show/pause/resume/cancel 和
+- 通过 Control Plane API 暴露 Change create/list/show/execute/execution/pause/resume/cancel 和
   `decide retry|cancel` 以及只读 `change ticket-graph CHANGE_ID`；Change 写命令共用
   Daemon ensure seam，纯查询只发现已有 Daemon。
 - `change ticket-graph` 只读取已运行 Daemon 的 Graph ReadModel，必须先校验 Change ID，

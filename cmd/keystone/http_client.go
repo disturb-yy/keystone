@@ -149,6 +149,36 @@ func (c *daemonHTTPClient) changeTicketGraph(ctx context.Context, endpoint strin
 	return result, nil
 }
 
+func (c *daemonHTTPClient) changeExecute(ctx context.Context, endpoint, key, changeID string, payload controlplane.ChangeExecuteRequest) (controlplane.ChangeExecuteResponse, error) {
+	response, err := c.requestWithHeaders(ctx, http.MethodPost, endpoint, "/v1/changes/"+url.PathEscape(changeID)+"/execute", payload, map[string]string{controlplane.IdempotencyKeyHeader: key})
+	if err != nil {
+		return controlplane.ChangeExecuteResponse{}, err
+	}
+	if response.StatusCode != http.StatusAccepted {
+		return controlplane.ChangeExecuteResponse{}, c.protocolFailure(response, ErrorChangeFailed, "Change Execute 请求失败")
+	}
+	var result controlplane.ChangeExecuteResponse
+	if err := decodeJSONResponse(response, &result); err != nil {
+		return controlplane.ChangeExecuteResponse{}, newCLIError(ErrorInvalidResponse, "Change Execute JSON 无效", err)
+	}
+	return result, nil
+}
+
+func (c *daemonHTTPClient) changeExecution(ctx context.Context, endpoint, changeID string) (controlplane.ExecutionReadModel, error) {
+	response, err := c.request(ctx, http.MethodGet, endpoint, "/v1/changes/"+url.PathEscape(changeID)+"/execution", nil)
+	if err != nil {
+		return controlplane.ExecutionReadModel{}, err
+	}
+	if response.StatusCode != http.StatusOK {
+		return controlplane.ExecutionReadModel{}, c.protocolFailure(response, ErrorChangeFailed, "Execution 查询请求失败")
+	}
+	var result controlplane.ExecutionReadModel
+	if err := decodeJSONResponse(response, &result); err != nil {
+		return controlplane.ExecutionReadModel{}, newCLIError(ErrorInvalidResponse, "Execution 查询 JSON 无效", err)
+	}
+	return result, nil
+}
+
 func (c *daemonHTTPClient) changeCommand(ctx context.Context, endpoint, key, changeID string, payload controlplane.ChangeCommandRequest) (controlplane.ChangeCommandResponse, error) {
 	response, err := c.requestWithHeaders(ctx, http.MethodPost, endpoint, "/v1/changes/"+url.PathEscape(changeID)+"/commands", payload, map[string]string{controlplane.IdempotencyKeyHeader: key})
 	if err != nil {

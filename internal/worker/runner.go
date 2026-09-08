@@ -3,6 +3,7 @@ package worker
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -114,12 +115,29 @@ func (r *Runner) Run(ctx context.Context) error {
 }
 
 func (r *Runner) executeAssignment(ctx context.Context, assignment workercontract.Assignment) error {
+	if assignment.ExecutionMode == "edit" {
+		claimID, err := newRuntimeClaimID()
+		if err != nil {
+			return err
+		}
+		claim, claimErr := r.config.Client.Claim(ctx, workercontract.ClaimRequest{AgentRunID: assignment.AgentRunID, LeaseToken: assignment.LeaseToken, RuntimeClaimID: claimID})
+		if claimErr != nil {
+			return fmt.Errorf("claim worker assignment: %w", claimErr)
+		}
+		if claim.Disposition != "claimed" && claim.Disposition != "duplicate" {
+			return fmt.Errorf("claim worker assignment: unexpected disposition %q", claim.Disposition)
+		}
+	}
 	adapter := r.config.Runtimes[assignment.Runtime]
 	if adapter == nil {
 		report := workercontract.Report{AgentRunID: assignment.AgentRunID, LeaseToken: assignment.LeaseToken, Attempt: assignment.Attempt, Outcome: workercontract.Outcome("failed"), FailureReason: "runtime_unavailable", StartedAt: r.now().Format(time.RFC3339Nano), CompletedAt: r.now().Format(time.RFC3339Nano)}
 		return r.reportWithRetry(ctx, report)
 	}
-	input := execution.ExecutionInput{Workspace: assignment.WorkspacePath, Instruction: assignment.Instruction, Runtime: assignment.Runtime, BeforeRevision: assignment.BeforeRevision, Timeout: r.config.RuntimeTimeout, ResultMode: assignment.ResultMode}
+	timeout := r.config.RuntimeTimeout
+	if assignment.TimeoutSeconds > 0 {
+		timeout = time.Duration(assignment.TimeoutSeconds) * time.Second
+	}
+	input := execution.ExecutionInput{Workspace: assignment.WorkspacePath, Instruction: assignment.Instruction, Runtime: assignment.Runtime, BeforeRevision: assignment.BeforeRevision, Timeout: timeout, ResultMode: assignment.ResultMode}
 	if r.config.Environment != nil {
 		input.Environment = execution.SanitizeEnvironment(r.config.Environment())
 	}
@@ -134,6 +152,14 @@ func (r *Runner) executeAssignment(ctx context.Context, assignment workercontrac
 	}
 	report := ReportFromRuntime(assignment, result, runErr, r.now())
 	return r.reportWithRetry(ctx, report)
+}
+
+func newRuntimeClaimID() (string, error) {
+	value := make([]byte, 16)
+	if _, err := rand.Read(value); err != nil {
+		return "", fmt.Errorf("create runtime claim id: %w", err)
+	}
+	return hex.EncodeToString(value), nil
 }
 
 func enforcePlanningSnapshotUnchanged(result execution.RuntimeResult) execution.RuntimeResult {

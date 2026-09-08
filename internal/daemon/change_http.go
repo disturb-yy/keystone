@@ -106,6 +106,22 @@ func (s *Server) handleChangeRoute(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, controlplane.ChangeCommandResponse{Change: changeDTO(change)})
 		return
 	}
+	if parts[1] == "execute" {
+		if len(parts) != 2 {
+			writeError(w, http.StatusNotFound, "change_not_found", "change was not found")
+			return
+		}
+		s.handleChangeExecute(w, r, service, changeID)
+		return
+	}
+	if parts[1] == "execution" {
+		if len(parts) != 2 {
+			writeError(w, http.StatusNotFound, "change_not_found", "change was not found")
+			return
+		}
+		s.handleChangeExecution(w, r, string(changeID))
+		return
+	}
 	if parts[1] == "commands" || parts[1] == "command" {
 		if r.Method != http.MethodPost || len(parts) != 2 {
 			writeError(w, http.StatusMethodNotAllowed, "invalid_request", "method is not allowed")

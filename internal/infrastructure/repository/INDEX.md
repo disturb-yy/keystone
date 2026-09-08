@@ -6,7 +6,7 @@
 
 | 文件 | 职责 |
 | --- | --- |
-| `git.go` | Git root、拓扑、旧 root 可验证性和连续两次 clean/HEAD Change Snapshot |
+| `git.go` | Git root、拓扑、旧 root 可验证性和连续两次 clean/HEAD Change Snapshot；支持受控 Git 可执行文件路径 |
 | `git_test.go` | 临时真实 Git Repository、dirty/ignored、detached/unborn Snapshot 行为测试 |
 | `snapshot.go` | 固定 commit 的临时 clone、隔离 Snapshot handle、相对路径边界和幂等清理 |
 | `snapshot_test.go` | 历史 revision、一致性、源工作树不变、路径隔离及失败清理集成测试 |

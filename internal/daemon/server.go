@@ -17,12 +17,14 @@ import (
 	"time"
 
 	"github.com/disturb-yy/keystone/contracts/controlplane"
+	executionapp "github.com/disturb-yy/keystone/internal/execution/application"
 	"github.com/disturb-yy/keystone/internal/infrastructure/artifact"
 	"github.com/disturb-yy/keystone/internal/infrastructure/id"
 	"github.com/disturb-yy/keystone/internal/infrastructure/localstate"
 	"github.com/disturb-yy/keystone/internal/infrastructure/manifest"
 	"github.com/disturb-yy/keystone/internal/infrastructure/migration"
 	"github.com/disturb-yy/keystone/internal/infrastructure/repository"
+	"github.com/disturb-yy/keystone/internal/infrastructure/sourcecontrol"
 	"github.com/disturb-yy/keystone/internal/infrastructure/workstore"
 	"github.com/disturb-yy/keystone/internal/planning"
 	"github.com/disturb-yy/keystone/internal/work"
@@ -74,8 +76,10 @@ type Server struct {
 	workerStore      *workstore.Store
 	artifacts        *artifact.Store
 	planning         *planning.Coordinator
+	execution        *executionapp.Service
 	planningManager  planningLifecycle
 	workerSupervisor *WorkerSupervisor
+	sourceControl    sourcecontrol.Adapter
 }
 
 // New 创建尚未运行的 Daemon 句柄。路径、目录、锁和监听器均在 Run 中按固定顺序创建。
@@ -349,12 +353,15 @@ func (s *Server) composeApplications(ctx context.Context, db *sql.DB, paths loca
 	if err != nil {
 		return fmt.Errorf("create planning coordinator: %w", err)
 	}
+	executionService := &executionapp.Service{Persistence: state, Source: daemonSourceControl{adapter: sourcecontrol.Adapter{}}}
 	s.mu.Lock()
 	s.projects = projects
 	s.changes = changes
 	s.workerStore = state
 	s.artifacts = artifactStore
 	s.planning = coordinator
+	s.execution = executionService
+	s.sourceControl = sourcecontrol.Adapter{}
 	s.mu.Unlock()
 	return nil
 }
@@ -433,6 +440,8 @@ func (s *Server) detachResources() daemonResources {
 	s.workerStore = nil
 	s.artifacts = nil
 	s.planning = nil
+	s.execution = nil
+	s.sourceControl = sourcecontrol.Adapter{}
 	s.planningManager = nil
 	s.workerSupervisor = nil
 	s.lock = nil

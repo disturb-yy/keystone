@@ -77,6 +77,21 @@ type PullResponse struct {
 	Assignment *Assignment `json:"assignment"`
 }
 
+// ClaimRequest 表示 Worker 在启动 Runtime 前申请一次性 RuntimeClaim。
+type ClaimRequest struct {
+	AgentRunID     string `json:"agent_run_id"`
+	LeaseToken     string `json:"lease_token"`
+	RuntimeClaimID string `json:"runtime_claim_id"`
+}
+
+// ClaimResponse 是 Claim 的幂等结果；它不授予 Worker 生命周期或持久化权限。
+type ClaimResponse struct {
+	Disposition    string `json:"disposition"`
+	AgentRunID     string `json:"agent_run_id"`
+	RuntimeClaimID string `json:"runtime_claim_id"`
+	LeaseExpiresAt string `json:"lease_expires_at,omitempty"`
+}
+
 // Assignment 表示 Daemon 下发给 Worker 的最小执行关联信息。
 type Assignment struct {
 	// AgentRunID 关联被分配的 AgentRun 传输标识。
@@ -93,6 +108,12 @@ type Assignment struct {
 
 	// ResultMode 只描述结果采集方式，不授予 Worker 生命周期权威。
 	ResultMode string `json:"result_mode,omitempty"`
+
+	// ExecutionMode 表示 Runtime 的最小权限模式；edit Assignment 必须先 Claim。
+	ExecutionMode string `json:"execution_mode,omitempty"`
+
+	// TimeoutSeconds 是 Daemon 固定的 Runtime timeout，不由 Worker 延长。
+	TimeoutSeconds int `json:"timeout_seconds,omitempty"`
 
 	// LeaseExpiresAt 是本次 Lease 的 UTC RFC3339 时间。
 	LeaseExpiresAt string `json:"lease_expires_at,omitempty"`
@@ -182,6 +203,14 @@ type ReportResponse struct {
 	AgentRunID      string `json:"agent_run_id,omitempty"`
 	LeaseState      string `json:"lease_state,omitempty"`
 	RetrySameReport bool   `json:"retry_same_report"`
+}
+
+// Validate 检查 Claim 的最小字段；Lease/Worker 绑定由 Daemon authority 完成。
+func (r ClaimRequest) Validate() error {
+	if strings.TrimSpace(r.AgentRunID) == "" || strings.TrimSpace(r.LeaseToken) == "" || strings.TrimSpace(r.RuntimeClaimID) == "" {
+		return errors.New("claim fields are required")
+	}
+	return nil
 }
 
 // ErrorResponse 是 Worker Protocol 的稳定错误边界。

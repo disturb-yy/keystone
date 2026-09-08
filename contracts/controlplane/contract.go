@@ -138,6 +138,37 @@ type ChangeCommandResponse struct {
 	Change ChangeDTO `json:"change"`
 }
 
+// ChangeExecuteRequest 是显式 Execute 的严格请求体。
+type ChangeExecuteRequest struct {
+	ExpectedVersion int    `json:"expected_version"`
+	WorkspaceBranch string `json:"workspace_branch,omitempty"`
+}
+
+// ExecutionTicketDTO 是 Canonical Ticket 的执行状态摘要。
+type ExecutionTicketDTO struct {
+	TicketID string `json:"ticket_id"`
+	Ordinal  int    `json:"ordinal"`
+	Title    string `json:"title"`
+	State    string `json:"state"`
+}
+
+// ExecutionReadModel 是不暴露 WorkspacePath、Lease、Prompt 或环境的执行查询模型。
+type ExecutionReadModel struct {
+	ExecutionSessionID string               `json:"execution_session_id"`
+	ChangeID           string               `json:"change_id"`
+	Status             string               `json:"status"`
+	WorkspaceBranch    string               `json:"workspace_branch"`
+	BaseRevision       string               `json:"base_revision"`
+	InputRevision      string               `json:"input_revision"`
+	Tickets            []ExecutionTicketDTO `json:"tickets"`
+}
+
+// ChangeExecuteResponse 是 Execute 首次接受和同请求重放的安全回执。
+type ChangeExecuteResponse struct {
+	Change    ChangeDTO          `json:"change"`
+	Execution ExecutionReadModel `json:"execution"`
+}
+
 // HumanDecisionRequest 是 retry 或 cancel 人工决定请求体。
 type HumanDecisionRequest struct {
 	Decision        string `json:"decision"`

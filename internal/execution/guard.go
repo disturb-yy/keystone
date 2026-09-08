@@ -77,7 +77,7 @@ func (g *Guard) Evidence(ctx context.Context, workspace string, limits Limits) (
 	if err != nil {
 		return GitEvidence{}, err
 	}
-	diff, err := g.git(ctx, workspace, "diff", "--binary", "--no-ext-diff", "--")
+	diff, err := g.git(ctx, workspace, "diff", "--binary", "--no-ext-diff", "HEAD", "--")
 	if err != nil {
 		return GitEvidence{}, fmt.Errorf("read workspace diff: %w", err)
 	}
@@ -204,14 +204,14 @@ func limitBytes(value []byte, limit int64) []byte {
 func writeGitWrapper(directory, realGit string) (string, error) {
 	if runtime.GOOS == "windows" {
 		path := filepath.Join(directory, "git.cmd")
-		content := "@echo off\r\nfor %%A in (%*) do (\r\n  if /I \"%%~A\"==\"commit\" exit /B 126\r\n  if /I \"%%~A\"==\"push\" exit /B 126\r\n  if /I \"%%~A\"==\"merge\" exit /B 126\r\n)\r\n\"" + realGit + "\" %*\r\n"
+		content := "@echo off\r\nfor %%A in (%*) do (\r\n  if /I \"%%~A\"==\"commit\" exit /B 126\r\n  if /I \"%%~A\"==\"push\" exit /B 126\r\n  if /I \"%%~A\"==\"merge\" exit /B 126\r\n  if /I \"%%~A\"==\"rebase\" exit /B 126\r\n  if /I \"%%~A\"==\"cherry-pick\" exit /B 126\r\n  if /I \"%%~A\"==\"reset\" exit /B 126\r\n  if /I \"%%~A\"==\"checkout\" exit /B 126\r\n  if /I \"%%~A\"==\"switch\" exit /B 126\r\n  if /I \"%%~A\"==\"restore\" exit /B 126\r\n  if /I \"%%~A\"==\"clean\" exit /B 126\r\n  if /I \"%%~A\"==\"worktree\" exit /B 126\r\n  if /I \"%%~A\"==\"stash\" exit /B 126\r\n  if /I \"%%~A\"==\"branch\" exit /B 126\r\n  if /I \"%%~A\"==\"tag\" exit /B 126\r\n  if /I \"%%~A\"==\"config\" exit /B 126\r\n  if /I \"%%~A\"==\"remote\" exit /B 126\r\n  if /I \"%%~A\"==\"fetch\" exit /B 126\r\n  if /I \"%%~A\"==\"pull\" exit /B 126\r\n)\r\n\"" + realGit + "\" %*\r\n"
 		if err := os.WriteFile(path, []byte(content), 0o700); err != nil {
 			return "", fmt.Errorf("write git wrapper: %w", err)
 		}
 		return path, nil
 	}
 	path := filepath.Join(directory, "git")
-	content := "#!/bin/sh\nfor arg in \"$@\"; do case \"$arg\" in commit|push|merge) echo 'git command denied by Keystone ExecutionGuard' >&2; exit 126;; esac; done\nexec " + shellQuote(realGit) + " \"$@\"\n"
+	content := "#!/bin/sh\nfor arg in \"$@\"; do case \"$arg\" in commit|push|merge|rebase|cherry-pick|reset|checkout|switch|restore|clean|worktree|stash|branch|tag|config|remote|fetch|pull) echo 'git command denied by Keystone ExecutionGuard' >&2; exit 126;; esac; done\nexec " + shellQuote(realGit) + " \"$@\"\n"
 	if err := os.WriteFile(path, []byte(content), 0o700); err != nil {
 		return "", fmt.Errorf("write git wrapper: %w", err)
 	}

@@ -16,6 +16,8 @@ AgentRun、Planning candidate/completion、Canonical Ticket Graph、HumanDecisio
 | `worker_store.go` | Worker 注册鉴权、可用 Worker 查询、Heartbeat/Pull、普通/Planning Assignment、Report classification、Artifact transaction、liveness watchdog 和重启/丢失收敛 |
 | `planning_store.go` | Planning run 启动围栏、candidate/系统失败 candidate 耐久化、late/Artifact failure、幂等原子 completion 和恢复查询 |
 | `ticket_graph_store.go` | Ticketize run 输入复制、Graph 原子 completion、重放/围栏和 Graph 查询映射 |
+| `execution_schema.go` | Schema v7 执行 Session、Worktree、DispatchEpoch、Authorization、Ticket 状态和 Snapshot/Evidence 表 |
+| `execution_store.go` | provisioning intent、Session finalization、脱敏读取模型和 Canonical FIFO Assignment 发放 |
 | `store_test.go` | 真实 SQLite 的幂等、失败回放、并发 rebind、事件唯一性和 rollback 测试 |
 | `change_store_test.go` | Change 创建、生命周期、Retry、Cancel、迁移兼容、并发版本和 SQLite 归属/追加约束测试 |
 | `worker_store_test.go` | Assignment/Lease、首次 Report、duplicate/conflict、late trace、liveness 和 daemon restart 收敛测试 |

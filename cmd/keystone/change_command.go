@@ -25,11 +25,43 @@ func (c *cli) newChangeCommand() *cobra.Command {
 	change.AddCommand(c.newChangeListCommand())
 	change.AddCommand(c.newChangeShowCommand())
 	change.AddCommand(c.newChangeTicketGraphCommand())
+	change.AddCommand(c.newChangeExecuteCommand())
+	change.AddCommand(c.newChangeExecutionCommand())
 	change.AddCommand(c.newChangeControlCommand("pause"))
 	change.AddCommand(c.newChangeControlCommand("resume"))
 	change.AddCommand(c.newChangeControlCommand("cancel"))
 	change.AddCommand(c.newChangeDecisionCommand())
 	return change
+}
+
+func (c *cli) newChangeExecuteCommand() *cobra.Command {
+	var branch, key string
+	var version int
+	command := &cobra.Command{
+		Use:   "execute CHANGE_ID",
+		Short: "为 Change 创建执行 Worktree",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return c.changeExecute(cmd.Context(), cmd.OutOrStdout(), args[0], version, key, branch)
+		},
+	}
+	command.Flags().IntVar(&version, "expected-version", 0, "观察到的 Change version")
+	command.Flags().StringVar(&key, "idempotency-key", "", "幂等键")
+	command.Flags().StringVar(&branch, "branch", "", "可选的 Worktree branch")
+	return command
+}
+
+func (c *cli) newChangeExecutionCommand() *cobra.Command {
+	execution := &cobra.Command{Use: "execution", Short: "查看 Change 执行状态", Args: cobra.NoArgs}
+	execution.AddCommand(&cobra.Command{
+		Use:   "show CHANGE_ID",
+		Short: "查看执行读取模型",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return c.changeExecutionShow(cmd.Context(), cmd.OutOrStdout(), args[0])
+		},
+	})
+	return execution
 }
 
 func (c *cli) newChangeTicketGraphCommand() *cobra.Command {
@@ -186,6 +218,39 @@ func (c *cli) changeTicketGraph(ctx context.Context, out io.Writer, changeID str
 		return err
 	}
 	response, err := c.client().changeTicketGraph(ctx, metadata.Endpoint, changeID)
+	if err != nil {
+		return err
+	}
+	return writeJSONOutput(out, response)
+}
+
+func (c *cli) changeExecute(ctx context.Context, out io.Writer, changeID string, version int, key, branch string) error {
+	if version < 1 || key == "" {
+		return newCLIError(ErrorChangeFailed, "change execute 需要 expected-version 和 idempotency-key", nil)
+	}
+	if err := controlplane.ValidateChangeID(changeID); err != nil {
+		return newCLIError(ErrorChangeFailed, "change_id 无效", err)
+	}
+	metadata, err := c.ensureDaemon(ctx)
+	if err != nil {
+		return err
+	}
+	response, err := c.client().changeExecute(ctx, metadata.Endpoint, key, changeID, controlplane.ChangeExecuteRequest{ExpectedVersion: version, WorkspaceBranch: branch})
+	if err != nil {
+		return err
+	}
+	return writeJSONOutput(out, response)
+}
+
+func (c *cli) changeExecutionShow(ctx context.Context, out io.Writer, changeID string) error {
+	if err := controlplane.ValidateChangeID(changeID); err != nil {
+		return newCLIError(ErrorChangeFailed, "change_id 无效", err)
+	}
+	metadata, err := readRuntimeMetadata(c.paths)
+	if err != nil {
+		return err
+	}
+	response, err := c.client().changeExecution(ctx, metadata.Endpoint, changeID)
 	if err != nil {
 		return err
 	}
