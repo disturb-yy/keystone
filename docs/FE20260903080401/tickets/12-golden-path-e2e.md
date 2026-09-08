@@ -7,6 +7,7 @@
 - 里程碑：M9
 - `BLOCKED_BY`：11
 - 交付类型：最终可复盘验收
+- 实施规格：[12-golden-path-e2e-spec.md](12-golden-path-e2e/spec/12-golden-path-e2e-spec.md)
 
 ## 目标
 
@@ -106,8 +107,12 @@ Runner 复制 fixture 后，在临时 Repository 中执行 git init -b main、`g
 显式 runner 路径为 scripts/golden-path-e2e.sh，只在 Linux/WSL 手工调用，不被普通 go test ./... 自动触发。它必须：
 
 - Runner 必须要求完整的 `--keystone-revision <Git-OID>`，拒绝以分支名、调用者当前 HEAD 或未提交工作树代替；操作者在 Ticket 11 真实验收后显式提供该 revision，Runner 不自行推断“已验收”。
-- 从该 revision 以 `git archive` 形成 run-local Keystone 源码快照，再构建明确的 keystone、keystone-daemon、keystone-worker 二进制到临时 bin 目录，记录 Keystone revision、Go version 和二进制 digest，不依赖未知 PATH。
-- 每次 GoldenPathRun 创建独立、受控的临时根，分别承载 demo Repository、二进制、LocalStateRoot 和安全摘要；Runner 必须显式选择该 LocalStateRoot，不能复用调用者默认的用户级数据根，且 Evidence 只记录脱敏标识和 digest，不记录临时根的绝对路径。
+- Runner 同时必须要求 `--run-root <new-directory>`、`--platform linux|wsl`、`--codex-binary <executable>` 与 `--playwright-browsers-path <directory>`；当 platform 为 linux 时还必须要求 `--platform-attestation host|vm`。`--run-root` 在启动时不得已存在，Runner 以受控权限创建它，并在任何 Codex 预检、Daemon 启动或公开写入前生成 UUIDv7 `GoldenPathRunID` 和规范化输入 manifest。
+- 输入 manifest 的 SHA-256 是 `GoldenPathEvidenceSetID`，它必须固定完整 Keystone revision、fixture tree digest、已冻结 ChangeIntent digest、Runner script digest 与 Dashboard lockfile digest。Linux 与 WSL 的成功记录只有 `GoldenPathEvidenceSetID` 相同才可共同支持 V1 结论；Go、Git、Codex、浏览器等平台运行时版本可不同，但必须分别记录。
+- 从该 revision 以 `git archive` 形成 run-local Keystone 源码快照。入口脚本只可完成参数/干净状态校验并 re-exec 该快照内的 `scripts/golden-path-e2e.sh`；后续 canonical 流程必须由快照脚本驱动。Runner 再从该快照构建明确的 keystone、keystone-daemon、keystone-worker 二进制到临时 bin 目录，记录 Keystone revision、Go version 和二进制 digest，不依赖调用者的源码工作树或未知 PATH。Keystone Source 证据链中的 Go/build/Dashboard 检查必须以该快照为输入；调用者工作树只可只读核对 revision 与干净状态。
+- 每次 GoldenPathRun 创建独立、受控的临时根，分别承载 demo Repository、二进制、LocalStateRoot、run manifest 和安全摘要；Runner 必须显式选择该 LocalStateRoot，不能复用调用者默认的用户级数据根，且 Evidence 只记录脱敏标识和 digest，不记录临时根的绝对路径。
+- 在启动 Daemon、创建 Project 或写入 GoldenPathCommandLedger 前，Runner 必须解析 `--codex-binary` 对应的单一可执行文件，并有界执行 `<resolved-codex> --version` 与 `<resolved-codex> login status`。两项均须在 30 秒内以非交互方式确认可用；Runner 仅在安全摘要中保存版本、结果类别、退出码、stdout/stderr digest 与有效 PATH digest，不保存认证原文、token、完整环境或绝对路径。Runner 必须以受控继承 PATH 使 Daemon/Worker 启动同一已解析 Codex。
+- 二进制不存在、版本探针失败、认证探针失败或认证结果无法判定时，Runner 以 `codex_binary_unavailable`、`codex_version_probe_failed`、`codex_auth_probe_failed` 或 `codex_auth_probe_indeterminate` 终止本次 Run 并保留现场；不得伪造 Worker Report、启动业务链、创建 Ledger、使用 OpenCode fallback 或写入成功 Evidence。预检成功只证明外层可用性，不构成 RealCodexAcceptance；真实 AgentRun 后的 Codex 失败必须以 Daemon 的实际 Report、Artifact、exit code 与公开 Query 为准，Runner 不得自行改写失败分类。
 - Runner 直接以受控子进程启动 `<run>/bin/keystone-daemon --data-dir <run>/state`，不调用内部启动上限为 15 秒的 `keystone daemon start`；在 60 秒预算内等待 DaemonReadiness。
 - Runner 只可读取自身 LocalStateRoot 的 RuntimeMetadata 中的 loopback endpoint 和 DaemonInstanceID，以建立第一条公开 API 连接；随后必须以 `GET /v1/daemon/status` 交叉校验同一 DaemonInstanceID 与 DaemonReadiness。RuntimeMetadata 不得被当成权威状态、Query 结果或 Evidence。
 - Run 结束时先以公开 stop 请求关闭该 Daemon 并等待最多 30 秒；若 Runner 自己启动的 Daemon/Worker 子进程树仍未退出，只能终止该树，且必须保留 Repository、Workspace、Commit、LocalStateRoot 和日志文件。
@@ -120,7 +125,7 @@ Runner 复制 fixture 后，在临时 Repository 中执行 git init -b main、`g
 - Daemon 启动预算为 60 秒；Understand、Design、Plan、Ticketize、每张 Ticket Execute、每张 Ticket Verify 和 Final Verify 各为 30 分钟；完整 GoldenPathRun 总预算为 4 小时。
 - 每项有界等待在前 30 秒每秒查询一次，此后每 5 秒查询一次；传输或 Query 暂时错误最多按 1 秒、2 秒、4 秒重试三次。pending 或无 Worker 仅在其阶段预算内等待；`FAIL`、`HUMAN_REQUIRED`、缺失真实 Diff、版本/契约冲突或候选不变量失败立即终止。
 - ProjectManifest V2 中每条 VerificationCommand 的 timeout 保持其已冻结值；fixture 的 `go test ./...` 仍为 900 秒，Runner 不得延长它。
-- Dashboard 浏览器观察只使用 lockfile 固定版本的 Playwright 及其对应 Chromium，在 Daemon 托管的 production build 上以 headless 模式执行；不得使用 Vite dev server、mock payload、前端状态伪造、手动关闭标签页或动态 `npx` 下载。
+- Dashboard 浏览器观察只使用 Dashboard devDependency 与 lockfile 固定版本的 Playwright 及其对应 Chromium，在 Daemon 托管的 production build 上以 headless 模式执行。操作者必须在 canonical GoldenPathRun 前，使用本地已锁定的 `dashboard/node_modules/.bin/playwright` 显式准备与 `--playwright-browsers-path` 对应的匹配 Chromium；该位置仅以脱敏标识和 digest 进入 packet/Evidence。canonical Runner 只验证并使用已准备的工具，不得通过 `npx` 动态取得 package 或浏览器。不得使用 Vite dev server、mock payload、前端状态伪造或手动关闭标签页。
 - 浏览器通过 Playwright 的 network offline → online 控制真实切断并恢复 EventSource；必须观察到断线、重连、断线后新的公开 Query 以及完整页面刷新后的新的公开 Query，并与 Daemon 权威响应一致。浏览器、driver 或 production build 缺失、版本不符或无法完成该链路时，平台 Run 失败并保留现场。
 - 不预写源码、不人工修复 Codex 结果；Codex 未形成真实 Diff 时整次 GoldenPathRun 失败。
 - 无论 Run 成功或失败，在独立只读复核完成前保留已形成的候选 Repository、Workspace、Commit 和 LocalStateRoot；不得自动 reset、clean、amend、rebase 或删除 Worktree。
@@ -154,15 +159,17 @@ Runner 分别以 BaseRevision 与 CandidateRevision 从 demo Repository 执行 `
 
 ## 已冻结证据记录
 
-一次 Run 完成全部自动与浏览器观察步骤后，Runner 只能在受控临时根创建脱敏 review packet；它不是成功 Evidence。packet 至少包含浏览器引擎/版本、Playwright 版本、headless 模式、production build digest、脱敏 origin、四个页面 URL 与深链接刷新结果、初次和重建 Query 的安全摘要、SSE 建连与安全 refresh payload、offline/online 方法和时刻、重连与新 Query 序列、每次 Query 与 Daemon 权威响应的一致性摘要，以及 packet 自身 digest。独立审阅者在不修改 Daemon、fixture、candidate Repository、Workspace 或 LocalStateRoot 的前提下，只读核对固定 Keystone revision、CandidateRevision、Artifact/digest、命令/退出码、平台来源和浏览器记录，并给出 PASS、FAIL 或 UNVERIFIED。
+每个终态 Run（包括 Codex 预检或任一阶段失败）都必须在受控临时根创建脱敏 `GoldenPathReviewPacket`；它不是成功 Evidence。packet 的规范 manifest 必须逐项列出安全材料的 role、media type、byte length 和 SHA-256，且规范 manifest 的 SHA-256 是 packet digest。它还必须绑定 `GoldenPathRunID`、`GoldenPathEvidenceSetID`、终态结果、最后 checkpoint、失败类别（如有）和退出码。成功 packet 额外包含浏览器引擎/版本、Playwright 版本、headless 模式、production build digest、脱敏 origin、四个页面 URL 与深链接刷新结果、初次和重建 Query 的安全摘要、SSE 建连与安全 refresh payload、offline/online 方法和时刻、重连与新 Query 序列，以及每次 Query 与 Daemon 权威响应的一致性摘要。
 
-只有 GoldenPathReview 为 PASS 后，才可在以下文件追加该平台的成功记录：
+独立审阅者必须不是该 Run 的执行者或 Runner，在不修改 Daemon、fixture、candidate Repository、Workspace 或 LocalStateRoot 的前提下，只读核对固定 Keystone revision、CandidateRevision、Artifact/digest、命令/退出码、平台来源和浏览器记录。审阅结果必须生成独立 UUIDv7 `GoldenPathReviewID`，并将审阅者的非敏感角色、独立性声明、`GoldenPathRunID`、`GoldenPathEvidenceSetID`、packet digest 和 PASS、FAIL 或 UNVERIFIED 结论一起绑定；FAIL/UNVERIFIED 绝不触发成功发布。
+
+Runner 不得创建、修改或追加成功 Evidence。只有 GoldenPathReview 为 PASS 后，才可由显式人工发布步骤在以下文件追加该平台的成功记录：
 
 ~~~text
 docs/FE20260903080401/tickets/12-golden-path-e2e-evidence.md
 ~~~
 
-每个平台独立记录一次 GoldenPathRun，至少包含平台、运行编号、Keystone/Go/Git/Codex 版本、二进制 digest、阶段输入、公开命令/API、响应和退出码、GoldenPathCommandLedger key fingerprint、轮询/超时结果、Project/Change/AgentRun/Artifact/Event/Decision、BaseRevision、WorkspaceInputRevision、TicketDelta、Diff、Commit 链、CandidateRevision、六条 Demo Acceptance Criteria、Dashboard 截图/API 快照、GoldenPathReview 结论和脱敏说明。
+每个平台独立记录一次 GoldenPathRun，且只能追加一个以 `## <platform> / <GoldenPathRunID>` 开头的记录。该记录必须绑定 `GoldenPathEvidenceSetID`、`GoldenPathReviewID` 与 packet digest，并至少包含平台、运行编号、Keystone/Go/Git/Codex 版本、二进制 digest、阶段输入、公开命令/API、响应和退出码、GoldenPathCommandLedger key fingerprint、轮询/超时结果、Project/Change/AgentRun/Artifact/Event/Decision、BaseRevision、WorkspaceInputRevision、TicketDelta、Diff、Commit 链、CandidateRevision、六条 Demo Acceptance Criteria、Dashboard 截图/API 快照、GoldenPathReview 结论和脱敏说明。纠错、撤销或替代既有记录只能追加一个引用原 `GoldenPathRunID` 的新段，不能静默改写历史成功记录。
 
 Evidence 分为三条不可互相替代的链：
 
@@ -178,6 +185,8 @@ Evidence 不得包含 secret、token、本机绝对路径、完整敏感 Prompt 
 
 ## 已冻结平台门槛
 
-非 WSL Linux 与 WSL 各需一条独立真实 Codex GoldenPathRun，不能互相引用。Linux 证据必须来自独立运行的非 WSL Linux 主机或 VM，并以脱敏的平台指纹和实际命令证明来源；WSL 内的容器、交叉编译或另一平台记录都不能替代它。原生 Windows 继续使用 Ticket 06/09/10 的原生 protocol/process/Git/fake 或真实证据，不新增为 Ticket 12 的第三条 Run。
+非 WSL Linux 与 WSL 各需一条独立真实 Codex GoldenPathRun，不能互相引用。Runner 必须验证 `--platform` 声明并形成脱敏 `GoldenPathPlatformProvenance`：仅可记录规范化的 `uname`、`os-release`、WSL marker、container marker、声明的平台与实际命令安全投影，不得记录 hostname、用户名、IP、machine ID 或路径。`--platform wsl` 必须观察到 WSL marker；`--platform linux` 必须观察不到 WSL 或 container marker，并要求操作者提供 `host` 或 `vm` 声明。任一不匹配、container 信号或无法判定均以 `platform_provenance_unverified` 终止该平台 Run，不能取得 PASS。该指纹是可由审阅者核对的来源声明，不宣称密码学证明。
+
+Linux 证据必须来自独立运行的非 WSL Linux 主机或 VM；WSL 内的容器、交叉编译或另一平台记录都不能替代它。原生 Windows 继续使用 Ticket 06/09/10 的原生 protocol/process/Git/fake 或真实证据，不新增为 Ticket 12 的第三条 Run。
 
 只有 Ticket 10/11 前置证据、两个平台真实 Codex、六条 Demo Acceptance Criteria、Graph/Diff/Verifier/Commit/CandidateRevision/integrate_ready、Dashboard production 浏览器观察和脱敏 Evidence 全部成立，并经过一次独立只读复核，才可宣布 V1 Thin Vertical Slice 完成。不得发生 merge、push、PR、deploy 或其他远程副作用。

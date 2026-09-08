@@ -646,30 +646,58 @@ _避免_：共享临时 Repository、携带历史的 fixture、主仓库子模�
 一次 GoldenPathRun 用于构建 Keystone 二进制的完整、不可变 Git OID，由操作者显式指定。它不是 demo 的 BaseRevision、CandidateRevision、分支名或调用者工作树的当前 HEAD。
 _避免_：BaseRevision、CandidateRevision、分支名、当前 HEAD
 
+**GoldenPathRunID**：
+Runner 在任何 Codex 预检、Daemon 启动或公开写入前，为一个新建受控临时根生成的 UUIDv7 标识。它只标识一次验收尝试，不表示 Change、AgentRun 或审阅结论。
+_避免_：ChangeID、AgentRunID、GoldenPathReviewID、临时目录绝对路径
+
+**GoldenPathEvidenceSet**：
+以规范化输入 manifest 及其 SHA-256（GoldenPathEvidenceSetID）标识的一组 Golden Path 不可变共同输入，至少绑定 Keystone revision、fixture tree、ChangeIntent、Runner script 和 Dashboard lockfile。只有具有相同 GoldenPathEvidenceSetID 的 Linux 与 WSL PASS 记录可共同支持 V1 结论。
+_避免_：平台运行时版本、单次 GoldenPathRun、可变工作树
+
 **GoldenPathRun**：
-从 `init` 到 Dashboard Trace 的一次完整验收尝试，在独立且复核前保留的临时 Repository 与 LocalStateRoot 中由公开 CLI 或 Control Plane API 驱动并记录实际结果；所有 runtime-backed AgentRun 使用真实 Codex，直接写 SQLite、调用内部 Service 或用 debug 接口伪造状态不属于 GoldenPathRun。
+从 `init` 到 Dashboard Trace 的一次完整验收尝试，在独立且复核前保留、具有 GoldenPathRunID 的临时 Repository 与 LocalStateRoot 中由公开 CLI 或 Control Plane API 驱动并记录实际结果；所有 runtime-backed AgentRun 使用真实 Codex，直接写 SQLite、调用内部 Service 或用 debug 接口伪造状态不属于 GoldenPathRun。
 _避免_：单元测试、局部 smoke、mock Runtime 代替的完整链路
 
 **GoldenPathRunner**：
-一个显式调用、可重复且有界的本机验收编排器；它从 GoldenPathKeystoneRevision 构建、为每次 Run 隔离并在复核前保留现场，只提交公开 Command、读取公开 Query 并采集证据，且只为发现自身 DaemonEndpoint 而受限读取其 LocalStateRoot 的 RuntimeMetadata，不被普通测试自动触发，也不拥有业务状态或恢复决策权。
+一个显式调用、可重复且有界的本机验收编排器；它从 GoldenPathKeystoneRevision 的 archive 内脚本驱动，为每次具有 GoldenPathRunID 与 GoldenPathEvidenceSetID 的 Run 隔离并在复核前保留现场，只提交公开 Command、读取公开 Query 并采集证据。它只为发现自身 DaemonEndpoint 而受限读取其 LocalStateRoot 的 RuntimeMetadata，不被普通测试自动触发，也不拥有业务状态或恢复决策权；它不自行发布成功 Evidence 或动态取得未预先固定的浏览器工具。
 _避免_：测试 fixture、内部 Application 驱动器、数据库脚本
 
 **GoldenPathCommandLedger**：
 一个 GoldenPathRun 在受控临时根中保存的非权威命令重放记录，将一次逻辑公开写入固定关联到其规范请求、ChangeVersion 和 IdempotencyKey。它只限制 Runner 的重送，不替代 Daemon 的 CommandReceipt 或权威状态。
 _避免_：CommandReceipt、Daemon 账本、可变重试草稿
 
+**GoldenPathCodexPreflight**：
+GoldenPathRunner 在启动 Daemon、创建 Project 或写入 GoldenPathCommandLedger 前，对指定 Codex executable 的有界、非交互外层可用性检查。它只固定可执行文件、版本、认证状态和受控 PATH 的安全摘要；通过不构成 RealCodexAcceptance，失败也不伪造 Worker 或 AgentRun 事实。
+_避免_：Worker capability 自报、DaemonReadiness、RealCodexAcceptance
+
 **GoldenPathBrowserObservation**：
-一个 GoldenPathRun 在 Daemon 托管的生产 Dashboard 上形成的可复核浏览器观察，包含真实 Query、EventSource 断线重连和页面刷新后的状态重建。它不是 dev server、mock payload、浏览器缓存或仅有截图。
+一个 GoldenPathRun 在 Daemon 托管的生产 Dashboard 上形成的可复核浏览器观察，包含真实 Query、EventSource 断线重连和页面刷新后的状态重建。它只使用由 Dashboard lockfile 固定、在 canonical Run 前显式准备并由 Runner 验证的 Playwright/Chromium；它不是 dev server、mock payload、浏览器缓存或仅有截图。
 _避免_：前端状态模拟、静态截图、Dashboard 单元测试
+
+**GoldenPathBrowserProvision**：
+canonical GoldenPathRun 开始前，操作者使用已由 Dashboard lockfile 固定的本地 Playwright CLI 准备匹配 Chromium 的显式前置步骤。Runner 只接受显式传入并验证的浏览器目录，不通过 `npx` 或隐式下载取得 package 或浏览器；该前置步骤通过不构成 GoldenPathBrowserObservation。
+_避免_：Run 中动态下载、Vite dev server、浏览器观察成功
 
 **RealCodexAcceptance**：
 Worker 在一次 runtime-backed AgentRun 中实际启动 Codex CLI 并形成可复核候选或审查结果的验收事实；Execute 阶段必须形成源码修改，Planning/Verify 阶段可分别形成 candidate 或只读审查结果，且必须记录 Codex 版本和真实进程结果。Fake Runtime、版本探针和交叉编译不能替代它。
 _避免_：Runtime 自报成功、fake Codex、交叉编译运行证据
 
+**GoldenPathPlatformProvenance**：
+GoldenPathRunner 为声明的 `linux` 或 `wsl` 平台形成的脱敏本机来源声明，包含受限系统探针、WSL/container marker、host/VM 声明和安全命令投影。它供独立审阅核对而不声称密码学地证明宿主环境；不匹配或不确定的声明不能支持 PASS。
+_避免_：跨编译产物、Docker 内的 WSL 替代证据、密码学远程证明
+
+**GoldenPathReviewPacket**：
+每个终态 GoldenPathRun 在受控临时根中形成的脱敏、完整性可核对输入包。其规范 manifest 逐项列出材料 role、media type、byte length 和 SHA-256，manifest 的 SHA-256 是 packet digest；失败包还固定终态阶段、最后 checkpoint、失败类别和退出码。
+_避免_：成功 Evidence、原始敏感日志、可变人工摘要
+
+**GoldenPathReviewID**：
+独立审阅者为一次固定 GoldenPathReviewPacket 生成的 UUIDv7 标识。它将审阅角色、独立性声明和 PASS、FAIL 或 UNVERIFIED 结论绑定到特定 GoldenPathRunID、GoldenPathEvidenceSetID 与 packet digest，不表示 AgentRun 或发布成功。
+_避免_：GoldenPathRunID、AgentRunID、GoldenPathEvidenceSetID、成功 Evidence
+
 **GoldenPathReview**：
-独立审阅者针对一个固定 GoldenPathRun 的脱敏 review packet 作出的只读结论，结论只能为 PASS、FAIL 或 UNVERIFIED。只有 PASS 允许将该平台 Run 写入 GoldenPathEvidence。
+非该 Run 执行者或 Runner 的独立审阅者，针对一个固定 GoldenPathReviewPacket 作出的只读结论。它以 GoldenPathReviewID 绑定 GoldenPathRunID、GoldenPathEvidenceSetID、packet digest、非敏感角色和独立性声明，结论只能为 PASS、FAIL 或 UNVERIFIED；只有 PASS 允许由人工将该平台 Run 追加到 GoldenPathEvidence。
 _避免_：Runner 自检、Runtime outcome、未复核的成功摘要
 
 **GoldenPathEvidence**：
-按平台保存且已获 GoldenPathReview PASS 的成功 GoldenPathRun 脱敏复盘记录，分别覆盖 Keystone Source、Demo Candidate 和 GoldenPath Trace 三条不能互相替代的证据链；它必须标识实际运行平台，使 Linux 与 WSL 不可复用同一 Run，也不得包含 secret、token 或本机绝对路径，且未完成真实 Codex 验收时不得伪造成功记录。
+按平台追加保存且已获 GoldenPathReview PASS 的成功 GoldenPathRun 脱敏复盘记录，分别覆盖 Keystone Source、Demo Candidate 和 GoldenPath Trace 三条不能互相替代的证据链；每条记录绑定 GoldenPathRunID、GoldenPathEvidenceSetID、GoldenPathReviewID 与 packet digest。它必须标识实际运行平台，使 Linux 与 WSL 不可复用同一 Run，也不得包含 secret、token 或本机绝对路径，且未完成真实 Codex 验收时不得伪造成功记录。
 _避免_：设计计划、仅有测试日志的记录、未验证的运行摘要
