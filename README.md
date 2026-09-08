@@ -10,4 +10,4 @@
 
 当前明确未实现：Worker 进程/runtime、Ticket Graph、真实 Strategy、Worktree 编排、Execute/Verify 的副作用执行与 Git 写入、Integrate 写入、Dashboard 业务功能。
 
-详细的当前路径、边界、证据和刷新条件见根 [`INDEX.md`](INDEX.md)；版本化 Ticket/spec 保持为只读规范输入。
+详细的当前路径、边界、证据和刷新条件见根 [`INDEX.md`](INDEX.md)；版本化 Ticket/spec 保持为只读规范输入。M8 的目标契约、实施顺序和子票入口见[Ticket 10](docs/FE20260903080401/tickets/10-verify-commit-integrate-ready.md)；它不表示 Verify、Commit 或 Integrate Ready 已实现。
