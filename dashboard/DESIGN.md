@@ -12,8 +12,8 @@ Keystone Dashboard 是本机单操作者使用的 Control Plane Client，用于�
 
 - [Ticket 11 — Dashboard Observation](../docs/FE20260903080401/tickets/11-dashboard-observation.md)：固定四个页面、Daemon 托管、Query 优先、SSE 只作刷新提示以及 Command/Decision 边界。
 - 本次对齐结论：同源生产托管、显式 URL 路由、浅色主题、桌面优先的响应式布局、TDesign React 组件、无 optimistic update 和有界 Trace/Artifact 展示。
-- [当前 Dashboard 入口](./src/main.tsx) 与 [当前样式](./src/styles.css)：已有蓝灰色、浅色画布、白色表面和深蓝文字基调，但当前仍是静态骨架。
-- [Dashboard package](./package.json)：当前使用 React、TypeScript、Vite；业务实现需要补充 TDesign React 运行依赖并更新锁文件。
+- [当前 Dashboard 入口](./src/main.tsx) 与 [当前样式](./src/styles.css)：已落地蓝灰色、浅色画布、白色表面和深蓝文字基调，以及四个固定页面的 Query/状态展示。
+- [Dashboard package](./package.json)：当前使用 React、TypeScript、Vite、TDesign React、TDesign icons 和 React Router，依赖版本已写入锁文件。
 - `tdesign-mcp-server` React 组件清单、组件文档和 DOM 资料：确认使用 `Layout`、`Menu`、`Breadcrumb`、`Card`、`Table`、`Tree`、`Timeline`、`Tag`、`Alert`、`Dialog`、`Drawer`、`Skeleton`、`Empty`、`Result`、`Button`、`Popconfirm`、`Statistic`、`Space`、`Typography` 等组件。
 
 ### Fallback 输入

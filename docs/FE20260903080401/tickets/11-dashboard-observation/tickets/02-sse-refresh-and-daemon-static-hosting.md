@@ -1,8 +1,8 @@
 # 11-02：SSE RefreshHint 与 Daemon 静态托管
 
-> 状态：`ready-for-agent`（规划已对齐，尚未实现）。父 Ticket：[11 Dashboard Observation](../../11-dashboard-observation.md)；规格：[11-dashboard-observation-spec.md](../spec/11-dashboard-observation-spec.md)。
+> 状态：代码已实现；SSE/static HTTP 局部测试已覆盖。父 Ticket：[11 Dashboard Observation](../../11-dashboard-observation.md)；规格：[11-dashboard-observation-spec.md](../spec/11-dashboard-observation-spec.md)。
 >
-> 依赖：Ticket 10 真实 acceptance evidence、Ticket 11-01 Query Contract。11-02 不得以静态文件或 mock event 代替上游 Query 行为。
+> 依赖边界：M7/M8 真实 acceptance 按用户授权跳过；实现仍只发送 refresh hint，不以静态文件或 mock event 代替上游 Query 行为。
 
 ## 目标
 

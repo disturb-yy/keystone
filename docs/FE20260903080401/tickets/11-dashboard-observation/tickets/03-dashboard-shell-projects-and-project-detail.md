@@ -1,8 +1,8 @@
 # 11-03：TDesign Dashboard Shell、Projects 与 Project Detail
 
-> 状态：`ready-for-agent`（规划已对齐，尚未实现）。父 Ticket：[11 Dashboard Observation](../../11-dashboard-observation.md)；规格：[11-dashboard-observation-spec.md](../spec/11-dashboard-observation-spec.md)。
+> 状态：代码已实现；Dashboard production build 与 lint 已通过。父 Ticket：[11 Dashboard Observation](../../11-dashboard-observation.md)；规格：[11-dashboard-observation-spec.md](../spec/11-dashboard-observation-spec.md)。
 >
-> 依赖：11-01 Query Contract、11-02 Daemon 静态托管/SSE；父 Ticket 的 `BLOCKED_BY: 10` 仍需先满足。
+> 依赖边界：11-01 Query Contract、11-02 Daemon 静态托管/SSE 已落地；M7/M8 真实 acceptance 按用户授权跳过，不在本子票中补做。
 
 ## 目标
 

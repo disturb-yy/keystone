@@ -3,6 +3,7 @@
 - 里程碑：M9
 - `BLOCKED_BY`：10
 - 交付类型：观察型 Dashboard 纵切
+- 当前状态：Query、SSE、静态托管和四页面代码已实现；M7/M8 真实验收按用户授权跳过，运行时证据缺口保留。
 - 规格：[11-dashboard-observation-spec.md](11-dashboard-observation/spec/11-dashboard-observation-spec.md)
 - 实施子票：[11-dashboard-observation/tickets/](11-dashboard-observation/tickets/)
 
@@ -30,6 +31,8 @@
 - SSE 丢失或浏览器刷新后，页面重新查询仍与 Daemon 状态一致。
 - Dashboard 只能提交定义的 Command/Decision，不能写 DB 或自行推进 Lifecycle。
 - Human Required Change 在界面中可定位、查看证据并提交追加式 Decision。
+
+本次实现不宣称 Ticket 09/M7 或 Ticket 10/M8 的真实运行时 acceptance；该验收范围按用户指示跳过，Dashboard 的本地 Contract、HTTP、构建和静态检查结果与上游运行时证据分开记录。
 
 ## 验证
 

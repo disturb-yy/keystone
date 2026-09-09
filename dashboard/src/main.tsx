@@ -1,18 +1,39 @@
-import { StrictMode } from 'react'
+import { StrictMode, useCallback, useState } from 'react'
+import type { ReactElement } from 'react'
 import { createRoot } from 'react-dom/client'
+import { BrowserRouter, Outlet, Route, Routes } from 'react-router-dom'
 
 import './styles.css'
 
-function App() {
+import { DashboardShell, type ShellContext } from './components'
+import { useRefreshStream, type StreamStatus } from './hooks'
+import { ChangeDetailPage, NeedsHumanPage, ProjectDetailPage, ProjectsPage } from './pages'
+
+function ShellRoute({ refreshVersion, streamStatus }: ShellContext): ReactElement {
   return (
-    <main className="shell" aria-labelledby="page-title">
-      <section className="card">
-        <p className="eyebrow">Keystone</p>
-        <h1 id="page-title">工程骨架</h1>
-        <p>这是当前前端工程的静态构建入口。</p>
-        <p>本页面用于确认工程能够安装、静态检查并生成生产构建产物。</p>
-      </section>
-    </main>
+    <DashboardShell>
+      <div className="shell-stream-context"><Outlet context={{ refreshVersion, streamStatus } satisfies ShellContext} /></div>
+    </DashboardShell>
+  )
+}
+
+function App(): ReactElement {
+  const [refreshVersion, setRefreshVersion] = useState(0)
+  const [streamStatus, setStreamStatus] = useState<StreamStatus>('connecting')
+  const onRefresh = useCallback(() => setRefreshVersion((value) => value + 1), [])
+  const onStatus = useCallback((status: StreamStatus) => setStreamStatus(status), [])
+  useRefreshStream(onRefresh, onStatus)
+  return (
+    <BrowserRouter>
+      <Routes>
+        <Route element={<ShellRoute refreshVersion={refreshVersion} streamStatus={streamStatus} />}>
+          <Route path="/" element={<ProjectsPage />} />
+          <Route path="/projects/:project_id" element={<ProjectDetailPage />} />
+          <Route path="/changes/:change_id" element={<ChangeDetailPage />} />
+          <Route path="/needs-human" element={<NeedsHumanPage />} />
+        </Route>
+      </Routes>
+    </BrowserRouter>
   )
 }
 

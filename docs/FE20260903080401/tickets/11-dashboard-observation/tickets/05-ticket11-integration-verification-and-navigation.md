@@ -1,6 +1,6 @@
 # 11-05：Ticket 11 集成验收与导航
 
-> 状态：`ready-for-agent`（规划已对齐，尚未实现）。父 Ticket：[11 Dashboard Observation](../../11-dashboard-observation.md)；规格：[11-dashboard-observation-spec.md](../spec/11-dashboard-observation-spec.md)。
+> 状态：代码与导航已实现；自动构建/静态检查和局部 HTTP 测试已执行，真实浏览器与上游 M7/M8 acceptance 未宣称通过。父 Ticket：[11 Dashboard Observation](../../11-dashboard-observation.md)；规格：[11-dashboard-observation-spec.md](../spec/11-dashboard-observation-spec.md)。
 >
 > 依赖：11-01、11-02、11-03、11-04，以及 Ticket 10 的真实 acceptance evidence。该子票负责收口，不解除任何上游 Ticket 的阻塞。
 

@@ -1,6 +1,6 @@
 # 11：Dashboard Observation 实施规格
 
-> 状态：规划规格已对齐，尚未实现。`BLOCKED_BY: 10` 是实现硬阻塞；本文件及子票的 `ready-for-agent` 只表示契约已可实施，不表示当前 checkout 已有 Dashboard、Query、SSE 或 M9 行为。
+> 状态：规格已对齐，Ticket 11 代码已实现。M7/M8 的真实 acceptance 按用户授权跳过；本文件不把构建、fake seam 或局部 HTTP 测试写成上游运行时证据。
 >
 > 关联：[Ticket 11](../../11-dashboard-observation.md)、[Dashboard DESIGN.md](../../../../../dashboard/DESIGN.md)。
 

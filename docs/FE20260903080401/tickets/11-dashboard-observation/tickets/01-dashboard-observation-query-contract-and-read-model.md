@@ -1,8 +1,8 @@
 # 11-01：Dashboard Observation Query Contract 与 ReadModel
 
-> 状态：`ready-for-agent`（规划已对齐，尚未实现）。父 Ticket：[11 Dashboard Observation](../../11-dashboard-observation.md)；规格：[11-dashboard-observation-spec.md](../spec/11-dashboard-observation-spec.md)。
+> 状态：代码已实现；Contract/Workstore/Daemon 局部测试已覆盖。父 Ticket：[11 Dashboard Observation](../../11-dashboard-observation.md)；规格：[11-dashboard-observation-spec.md](../spec/11-dashboard-observation-spec.md)。
 >
-> 阻塞：父 Ticket 的 `BLOCKED_BY: 10` 未解除前不得开始实现。Ticket 08 的 Canonical Ticket Graph 与 Ticket 10 的 Execution/Verification/Commit 真实 acceptance evidence 必须先存在。
+> 上游边界：M7/M8 真实 acceptance 按用户授权跳过；Ticket Graph/Execution 尚未形成时由 section 返回 `not_yet_available`，不伪造上游事实。
 
 ## 目标
 

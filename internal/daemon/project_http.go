@@ -44,13 +44,14 @@ func (s *Server) handleProjectInit(w http.ResponseWriter, r *http.Request) {
 		writeProjectError(w, err)
 		return
 	}
+	s.publishRefresh(controlplane.RefreshHint{ResourceType: "project", ProjectID: string(project.Identity.ProjectID)})
 	writeJSON(w, http.StatusOK, controlplane.ProjectInitResponse{Project: projectDTO(project)})
 }
 
 func (s *Server) handleProjectRoute(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimPrefix(r.URL.Path, "/v1/projects/")
 	parts := strings.Split(strings.TrimSuffix(path, "/"), "/")
-	if len(parts) != 1 && !(len(parts) == 2 && parts[1] == "events") {
+	if len(parts) != 1 && !(len(parts) == 2 && (parts[1] == "events" || parts[1] == "changes")) {
 		writeError(w, http.StatusNotFound, "project_not_found", "project was not found")
 		return
 	}
@@ -60,6 +61,10 @@ func (s *Server) handleProjectRoute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	projectID := domain.ProjectID(projectIDText)
+	if len(parts) == 2 && parts[1] == "changes" {
+		s.handleProjectChanges(w, r, projectID)
+		return
+	}
 	s.mu.RLock()
 	service := s.projects
 	s.mu.RUnlock()

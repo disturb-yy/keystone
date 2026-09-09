@@ -49,6 +49,7 @@ func (s *Server) handleChangeCreate(w http.ResponseWriter, r *http.Request) {
 		writeChangeError(w, err)
 		return
 	}
+	s.publishRefresh(controlplane.RefreshHint{ResourceType: "change", ProjectID: string(change.ProjectID), ChangeID: string(change.ID)})
 	s.wakePlanning()
 	writeJSON(w, http.StatusCreated, controlplane.ChangeCreateResponse{Change: changeDTO(change)})
 }
@@ -120,6 +121,14 @@ func (s *Server) handleChangeRoute(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.handleChangeExecution(w, r, string(changeID))
+		return
+	}
+	if parts[1] == "observation" {
+		if len(parts) != 2 {
+			writeError(w, http.StatusNotFound, "change_not_found", "change was not found")
+			return
+		}
+		s.handleChangeObservation(w, r, changeID)
 		return
 	}
 	if parts[1] == "tickets" && len(parts) == 4 {
@@ -245,6 +254,7 @@ func (s *Server) handleChangeCommand(w http.ResponseWriter, r *http.Request, ser
 	if request.Command == "resume" {
 		s.wakePlanning()
 	}
+	s.publishRefresh(controlplane.RefreshHint{ResourceType: "change", ProjectID: string(change.ProjectID), ChangeID: string(change.ID)})
 	writeJSON(w, http.StatusOK, controlplane.ChangeCommandResponse{Change: changeDTO(change)})
 }
 
@@ -267,6 +277,7 @@ func (s *Server) handleChangeDecision(w http.ResponseWriter, r *http.Request, se
 	if request.Decision == domain.HumanDecisionRetry {
 		s.wakePlanning()
 	}
+	s.publishRefresh(controlplane.RefreshHint{ResourceType: "change", ProjectID: string(change.ProjectID), ChangeID: string(change.ID)})
 	writeJSON(w, http.StatusOK, controlplane.HumanDecisionResponse{Change: changeDTO(change)})
 }
 

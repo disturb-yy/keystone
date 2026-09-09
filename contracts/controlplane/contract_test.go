@@ -304,6 +304,58 @@ func TestTicketGraphReadModelJSONHidesGenerationKeyAndExecutionFields(t *testing
 	}
 }
 
+func TestDashboardObservationJSONKeepsAvailabilityAndHidesRuntimeFields(t *testing.T) {
+	input := ChangeObservationReadModel{
+		SchemaVersion:    "dashboard-observation.v1",
+		ObservedAt:       "2026-09-09T00:00:00Z",
+		Project:          ObservationProjectDTO{ProjectID: "project-1", CreatedAt: "2026-09-08T00:00:00Z"},
+		Change:           ObservationChangeDTO{ChangeID: "change-1", ProjectID: "project-1", Stage: "Execute", Status: "active", Version: 3},
+		Lifecycle:        LifecycleObservation{ObservationSection: ObservationSection{Availability: "available"}, Stage: "Execute", Status: "active", Version: 3},
+		TicketGraph:      TicketGraphObservation{ObservationSection: ObservationSection{Availability: "not_yet_available", ReasonCode: "ticket_graph_not_yet_formed"}},
+		Execution:        ExecutionObservation{ObservationSection: ObservationSection{Availability: "not_yet_available", ReasonCode: "execution_not_started"}},
+		Trace:            TraceObservation{ObservationSection: ObservationSection{Availability: "available"}, Events: []ChangeEventDTO{}, Runs: []AgentRunDTO{}, Decisions: []HumanDecisionDTO{}},
+		Artifacts:        ArtifactsObservation{ObservationSection: ObservationSection{Availability: "available"}, Artifacts: []ArtifactObservationDTO{}},
+		Health:           HealthObservation{ObservationSection: ObservationSection{Availability: "available"}, DaemonReady: true, Workers: []WorkerHealthDTO{}},
+		AvailableActions: []string{"pause", "cancel"},
+	}
+	encoded, err := json.Marshal(input)
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+	text := string(encoded)
+	for _, field := range []string{"\"availability\":\"not_yet_available\"", "\"reason_code\":\"ticket_graph_not_yet_formed\"", "\"available_actions\":[\"pause\",\"cancel\"]"} {
+		if !strings.Contains(text, field) {
+			t.Fatalf("observation JSON = %s, missing %s", text, field)
+		}
+	}
+	for _, forbidden := range []string{"workspace_path", "lease_token", "repository_root", "prompt", "database_path"} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("observation JSON contains forbidden field %q: %s", forbidden, text)
+		}
+	}
+}
+
+func TestRefreshHintJSONHasOnlyRefreshFields(t *testing.T) {
+	encoded, err := json.Marshal(RefreshHint{ResourceType: "change", ProjectID: "project-1", ChangeID: "change-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]any
+	if err := json.Unmarshal(encoded, &fields); err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{"resource_type", "project_id", "change_id"} {
+		if _, ok := fields[field]; !ok {
+			t.Fatalf("refresh hint fields = %v, missing %q", fields, field)
+		}
+	}
+	for _, forbidden := range []string{"snapshot", "command", "decision", "cursor", "replay_token"} {
+		if _, ok := fields[forbidden]; ok {
+			t.Fatalf("refresh hint fields = %v, contains forbidden %q", fields, forbidden)
+		}
+	}
+}
+
 func TestAgentRunDTOJSON(t *testing.T) {
 	tests := []struct {
 		name  string

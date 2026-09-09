@@ -50,6 +50,8 @@ type Options struct {
 	ShutdownTimeout time.Duration
 	// Worker 控制启动期的独立 keystone-worker 监管；默认按 sibling/PATH 自动发现。
 	Worker WorkerSupervisorOptions
+	// DashboardDir 指向 Dashboard 生产构建目录；零值使用当前工作目录下的 dashboard/dist。
+	DashboardDir string
 }
 
 // Server 是 Daemon 的运行句柄，并拥有本次运行的本机状态、HTTP 和数据库资源。
@@ -80,6 +82,7 @@ type Server struct {
 	planningManager  planningLifecycle
 	workerSupervisor *WorkerSupervisor
 	sourceControl    sourcecontrol.Adapter
+	updates          *refreshHub
 }
 
 // New 创建尚未运行的 Daemon 句柄。路径、目录、锁和监听器均在 Run 中按固定顺序创建。
@@ -92,6 +95,7 @@ func New(dataDir string, options Options) *Server {
 		options:  options,
 		stopCh:   make(chan struct{}),
 		serveErr: make(chan error, 1),
+		updates:  newRefreshHub(),
 	}
 }
 
@@ -424,6 +428,7 @@ type daemonResources struct {
 	planningManager     planningLifecycle
 	planningCoordinator *planning.Coordinator
 	workerSupervisor    *WorkerSupervisor
+	updates             *refreshHub
 }
 
 func (s *Server) detachResources() daemonResources {
@@ -431,6 +436,7 @@ func (s *Server) detachResources() daemonResources {
 	resources := daemonResources{
 		server: s.httpServer, db: s.db, paths: s.paths, instanceID: s.instanceID, lock: s.lock,
 		planningManager: s.planningManager, planningCoordinator: s.planning, workerSupervisor: s.workerSupervisor,
+		updates: s.updates,
 	}
 	s.httpServer = nil
 	s.listener = nil
@@ -444,6 +450,7 @@ func (s *Server) detachResources() daemonResources {
 	s.sourceControl = sourcecontrol.Adapter{}
 	s.planningManager = nil
 	s.workerSupervisor = nil
+	s.updates = nil
 	s.lock = nil
 	s.readiness = false
 	s.mu.Unlock()
@@ -452,6 +459,9 @@ func (s *Server) detachResources() daemonResources {
 
 func (s *Server) shutdownResources() error {
 	resources := s.detachResources()
+	if resources.updates != nil {
+		resources.updates.close()
+	}
 	planningManagerErr := s.stopPlanningManager(resources.planningManager)
 	workerErr := s.stopWorkerSupervisor(resources.workerSupervisor)
 	snapshotErr := closePlanningCoordinatorAfterStops(errors.Join(planningManagerErr, workerErr), resources.planningCoordinator)
@@ -546,14 +556,24 @@ func wrapShutdownError(operation string, err error) error {
 func (s *Server) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", s.handleHealth)
+	mux.HandleFunc("/v1", s.handleUnknownAPI)
+	mux.HandleFunc("/v1/", s.handleUnknownAPI)
 	mux.HandleFunc("/v1/daemon/status", s.handleStatus)
 	mux.HandleFunc("/v1/daemon/stop", s.handleStop)
+	mux.HandleFunc("/v1/updates", s.handleUpdates)
+	mux.HandleFunc("/v1/needs-human", s.handleNeedsHuman)
+	mux.HandleFunc("/v1/projects", s.handleProjectInventory)
 	mux.HandleFunc("/v1/projects/init", s.handleProjectInit)
 	mux.HandleFunc("/v1/projects/", s.handleProjectRoute)
 	mux.HandleFunc("/v1/changes", s.handleChangesRoot)
 	mux.HandleFunc("/v1/changes/", s.handleChangeRoute)
 	mux.HandleFunc("/worker/v1/", s.handleWorkerRoute)
+	mux.HandleFunc("/", s.handleDashboard)
 	return mux
+}
+
+func (s *Server) handleUnknownAPI(w http.ResponseWriter, r *http.Request) {
+	writeError(w, http.StatusNotFound, "not_found", "API route is not found")
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {

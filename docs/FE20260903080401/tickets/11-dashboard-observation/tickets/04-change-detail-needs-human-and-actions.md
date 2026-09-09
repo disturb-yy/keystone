@@ -1,8 +1,8 @@
 # 11-04：Change Detail、Needs Human 与安全操作
 
-> 状态：`ready-for-agent`（规划已对齐，尚未实现）。父 Ticket：[11 Dashboard Observation](../../11-dashboard-observation.md)；规格：[11-dashboard-observation-spec.md](../spec/11-dashboard-observation-spec.md)。
+> 状态：代码已实现；Change Observation/Needs Human/有限操作与 Dashboard build 已通过局部验证。父 Ticket：[11 Dashboard Observation](../../11-dashboard-observation.md)；规格：[11-dashboard-observation-spec.md](../spec/11-dashboard-observation-spec.md)。
 >
-> 依赖：11-01 Query Contract、11-02 Daemon 静态托管/SSE、11-03 Dashboard shell；Ticket 10 的 Verify/Commit/FinalVerify 真实 ReadModel 是本子票的内容前提。
+> 依赖边界：11-01 至 11-03 已落地；M7/M8 真实 acceptance 按用户授权跳过，Execution 尚未形成时保持 `not_yet_available`。
 
 ## 目标
 

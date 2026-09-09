@@ -9,7 +9,8 @@ SQLite 行为；这些行为由 `internal/daemon` 负责。
 ## 文件
 
 - `contract.go`：版本前缀、错误 envelope、健康响应、Daemon status/stop、Project Init/Query/Event Query、Change/Trace/Ticket Graph DTO、Planning Artifact/AgentRun 只读元数据和幂等键类型。
-- `contract_test.go`：Health、Daemon status/stop、错误 envelope、Planning metadata 向后兼容、Ticket Graph 公开字段边界、幂等键的 JSON round-trip 和字段约束测试。
+- `observation.go`：Dashboard 的 Project inventory、Project-scoped Change list、Observation envelope、section availability、Needs Human、Health、分页和 SSE RefreshHint DTO。
+- `contract_test.go`：Health、Daemon status/stop、错误 envelope、Planning metadata 向后兼容、Ticket Graph 公开字段边界、Dashboard Observation/SSE 安全字段、幂等键的 JSON round-trip 和字段约束测试。
 - `AGENTS.md`：本 package 的职责、依赖和验证规约。
 
 ## 当前 DTO
@@ -33,6 +34,9 @@ SQLite 行为；这些行为由 `internal/daemon` 负责。
 | `ChangeEventsResponse` / `ChangeRunsResponse` | Event 和 AgentRun Trace；AgentRun 可选返回 run kind 与固定 source revision |
 | `ChangeArtifactsResponse` / `ChangeDecisionsResponse` | ArtifactRef 和 HumanDecision Trace；ArtifactRef 可选返回 Planning kind、schema、summary、source revision 与输入/raw-log 关联 |
 | `TicketGraphReadModel` | `GET /v1/changes/{change_id}/ticket-graph` 的 Graph、Ticket、Acceptance Criteria、依赖和 StructuralFrontier 只读快照 |
+| `ProjectListResponse` / `ProjectChangesResponse` | Dashboard Projects inventory 与 Project-scoped Change list；服务端游标和稳定分页元数据 |
+| `ChangeObservationReadModel` | Change Detail 的 Lifecycle、Ticket Graph、Execution、Trace、Artifact、Health 和 available actions envelope |
+| `NeedsHumanResponse` / `RefreshHint` | Daemon 标记的人工队列与仅用于唤醒 Query 的 SSE payload |
 
 ## 关系
 
@@ -40,10 +44,10 @@ SQLite 行为；这些行为由 `internal/daemon` 负责。
 cmd/keystone → contracts/controlplane → internal/daemon HTTP Handler
 ```
 
-`dashboard/` 当前仍是前端骨架，没有已落地的业务 API 调用；它是该边界的
-目标客户端。`internal/daemon/` 注册并实现 `/healthz`、
+`dashboard/` 当前通过 typed native fetch 消费 Dashboard Observation Query；它是该边界的
+客户端，不拥有业务状态。`internal/daemon/` 注册并实现 `/healthz`、
 `/v1/daemon/status`、`/v1/daemon/stop`、`/v1/projects/init`、Project Query、
-以及 `/v1/changes` Change Lifecycle、Execute/Execution 路由，但不把 Handler 或 SQLite 代码放入
+以及 `/v1/changes` Change Lifecycle、Execute/Execution、Dashboard Observation/SSE 路由，但不把 Handler 或 SQLite 代码放入
 本 package。
 
 ## 明确边界

@@ -19,10 +19,10 @@
 | `CONTEXT.md`、`docs/adr/` | 项目术语与已接受的架构决策 | 已存在；记录 LocalStateRoot、DaemonReadiness 等语义及本机 Daemon 控制边界，不表示 M1 已实现 |
 | `cmd/`、`configs/` | `cmd/keystone`、`cmd/keystone-daemon`、`cmd/keystone-worker` 与 `configs` 的 `.gitkeep` | `init`、Change、Daemon CLI 和独立 Worker 入口已实现 |
 | `internal/infrastructure/` | 基础能力及 `manifest`、`repository`、`sourcecontrol`、`artifact`、`workstore` adapter | 已有本机状态、Migration、严格 Git/Manifest、固定 revision Snapshot、受约束 Worktree/Candidate/Commit、Artifact 和 Project/Change/Worker/Planning/Ticket Graph/Execution/Verification/Commit SQLite 持久化能力 |
-| `contracts/controlplane/` | `/v1` 版本前缀、错误 envelope、Daemon/Project/Change/Artifact/AgentRun/Execution DTO、`Idempotency-Key` | 已落地 JSON Contract package；HTTP Handler 位于 `internal/daemon`，包含 Verify/Commit/FinalVerify 回执 |
+| `contracts/controlplane/` | `/v1` 版本前缀、错误 envelope、Daemon/Project/Change/Artifact/AgentRun/Execution/Dashboard Observation DTO、`Idempotency-Key` | 已落地 JSON Contract package；HTTP Handler 位于 `internal/daemon`，包含 Verify/Commit/FinalVerify 回执和 Dashboard Query/SSE 边界 |
 | `contracts/worker/` | Register、Heartbeat、Pull、Claim、edit/`kind: verify` Assignment、Report、typed VerificationEvidence 与 `planning_candidate` 传输 DTO | 已落地严格 JSON Contract；HTTP/authority 位于 Daemon/Work Store |
 | `docs/architecture-baseline/` | 架构参考目录 | 当前工作树不存在；目标架构文字不作为运行行为证据 |
-| `dashboard/` | React、TypeScript、Vite 源码、`package.json` 与 `package-lock.json` | 已有可构建骨架，无业务页面 |
+| `dashboard/` | React、TypeScript、Vite、TDesign React、typed fetch、四个固定路由与响应式样式 | 已实现 Projects、Project Detail、Change Detail、Needs Human；同源生产静态托管由 Daemon 提供 |
 | `migrations/`、`scripts/` | 根级路径尚不存在 | Migration runner 位于 `internal/infrastructure/migration/`；Ticket 04/05 业务 Migration 由 `workstore` 提供 |
 
 当前工作树已有基础 `.go`、Ticket 02 基础设施、Ticket 04 Project Bootstrap、Ticket 05 Change Lifecycle/Artifact/Event、Ticket 06 本机 Worker/Runtime seam、Ticket 07 只读 Planning、Ticket 08 Canonical Ticket Graph、Ticket 09 Worktree Execute/Diff 纵切和 Ticket 10 Verify/Commit/FinalVerify 实现。Ticket 06 的真实 Codex/原生 Windows 验收，以及本次按用户授权跳过的 Ticket 09/M7 真实验收仍是独立证据缺口；它们不能由 fake 测试或编译替代。`.agents/`、`.codex/` 和 `.idea/` 属于工作区或 IDE 工具目录，不纳入项目架构导航。
@@ -59,13 +59,13 @@ Human
 | 路径 | 地图位置 | 当前状态 |
 | --- | --- | --- |
 | `cmd/` | CLI、Daemon、Worker 入口边界 | `cmd/keystone` 已提供 `init`、Change 和 Daemon 生命周期命令；`cmd/keystone-worker` 已提供 stdin secret 的独立 Worker 入口 |
-| `dashboard/` | Local Web UI Client | 已有 React/TypeScript/Vite 骨架与锁文件 |
+| `dashboard/` | Local Web UI Client | 已有 TDesign React/TypeScript/Vite 页面、Query hooks、SSE refresh 和锁文件 |
 
 ### L2 — Contract
 
 | 路径 | 连接对象 | 当前状态 |
 | --- | --- | --- |
-| `contracts/controlplane/` | CLI / Dashboard ↔ Daemon 的 Control Plane API | 已落地 `/v1` Daemon、Project 与 Change DTO；路由位于 `internal/daemon` |
+| `contracts/controlplane/` | CLI / Dashboard ↔ Daemon 的 Control Plane API | 已落地 `/v1` Daemon、Project、Change 与 Dashboard Observation DTO；路由位于 `internal/daemon` |
 | `contracts/worker/` | Daemon ↔ Worker 的 Narrow Worker Protocol | 已落地严格 DTO/解码；固定路由处理位于 `internal/daemon` |
 
 ### L3 — Application
@@ -152,6 +152,7 @@ Daemon → contracts/worker → Worker
 | 持久化或外部适配 | `internal/infrastructure/` | Git/Manifest、受约束 Worktree/Candidate/Commit、Artifact store、Project/Change/Worker/Ticket Graph/Execution/Verification/Commit workstore、`migrations/` |
 | Ticket 02 实现 | `docs/FE20260903080401/tickets/02-local-state-and-boundary-contracts/` | spec、子 Ticket、localstate/migration/Contract 实现与验收记录 |
 | 运行术语与长期决策 | `CONTEXT.md`、`docs/adr/` | 术语消歧与已接受的本机 Daemon 控制边界 |
+| Dashboard Observation | `contracts/controlplane/observation.go`、`internal/daemon/observation_http.go`、`dashboard/src/` | Project inventory、Change Observation、Needs Human、SSE refresh hint 和有限 Command/Decision UI |
 
 规则、修改前阅读顺序和验证要求见 `AGENTS.md`；本表只提供定位关系。
 
@@ -167,8 +168,8 @@ Daemon → contracts/worker → Worker
 
 ## Freshness
 
-- 生成日期：`2026-09-08`。
+- 生成日期：`2026-09-09`。
 - Graphify 输出、CodeMap 输出和 MCP 代码地图：当前未发现。
-- `CONTEXT.md` 与 `docs/adr/0001-local-daemon-control-plane.md` 记录本机 Daemon 控制边界；Ticket 04/05 的实际代码以当前 checkout 为准。
-- `Makefile` 提供根级验证入口；`dashboard/`、`contracts/{controlplane,worker}/`、Daemon、Project/Change HTTP/CLI、Worker Protocol/authority、`internal/{worker,execution,planning,governance}` 与 `internal/infrastructure/{config,logging,id,localstate,migration,manifest,repository,sourcecontrol,artifact,workstore}/` 已落地。Ticket 10 的真实 M7 前置验收、真实 Codex/原生 Windows 和 Ticket 11 之后的生产链仍未形成证据。
+- `CONTEXT.md` 与 `docs/adr/0001-local-daemon-control-plane.md` 记录本机 Daemon 控制边界；Ticket 04/05/11 的实际代码以当前 checkout 为准。
+- `Makefile` 提供根级验证入口；`dashboard/`、`contracts/{controlplane,worker}/`、Daemon、Project/Change HTTP/CLI、Worker Protocol/authority、`internal/{worker,execution,planning,governance}` 与 `internal/infrastructure/{config,logging,id,localstate,migration,manifest,repository,sourcecontrol,artifact,workstore}/` 已落地。Ticket 11 的 Query/SSE/静态托管和页面代码已实现；M7/M8 真实验收按用户授权跳过，真实 Codex、原生 Windows、浏览器和下游生产链证据仍未形成。
 - 新增实现、创建目标目录或刷新架构 / 代码地图后，本索引需要重新对齐。

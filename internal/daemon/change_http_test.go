@@ -260,7 +260,7 @@ func newChangeHTTPTestServer(t *testing.T) (*Server, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &Server{projects: projects, changes: changes}, root
+	return &Server{projects: projects, changes: changes, workerStore: state, updates: newRefreshHub()}, root
 }
 
 func TestPlanningTraceMetadataDTOs(t *testing.T) {
