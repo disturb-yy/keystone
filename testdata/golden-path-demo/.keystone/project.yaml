@@ -1,0 +1,7 @@
+version: 2
+project_id: "018f0000-0000-7000-8000-000000000000"
+verify:
+  commands:
+    - name: go-test
+      argv: ["go", "test", "./..."]
+      timeout_seconds: 900

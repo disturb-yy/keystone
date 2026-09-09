@@ -23,7 +23,7 @@
 | `contracts/worker/` | Register、Heartbeat、Pull、Claim、edit/`kind: verify` Assignment、Report、typed VerificationEvidence 与 `planning_candidate` 传输 DTO | 已落地严格 JSON Contract；HTTP/authority 位于 Daemon/Work Store |
 | `docs/architecture-baseline/` | 架构参考目录 | 当前工作树不存在；目标架构文字不作为运行行为证据 |
 | `dashboard/` | React、TypeScript、Vite、TDesign React、typed fetch、四个固定路由与响应式样式 | 已实现 Projects、Project Detail、Change Detail、Needs Human；同源生产静态托管由 Daemon 提供 |
-| `migrations/`、`scripts/` | 根级路径尚不存在 | Migration runner 位于 `internal/infrastructure/migration/`；Ticket 04/05 业务 Migration 由 `workstore` 提供 |
+| `migrations/`、`scripts/`、`testdata/golden-path-demo/` | `scripts/golden-path-e2e.sh` 与冻结 Go HTTP Demo Fixture | 根级 `migrations/` 仍不存在；Ticket 12 Runner 从完整 revision archive 构建源码、二进制和 Dashboard，并保留失败 Review Packet；不发布成功 Evidence |
 
 当前工作树已有基础 `.go`、Ticket 02 基础设施、Ticket 04 Project Bootstrap、Ticket 05 Change Lifecycle/Artifact/Event、Ticket 06 本机 Worker/Runtime seam、Ticket 07 只读 Planning、Ticket 08 Canonical Ticket Graph、Ticket 09 Worktree Execute/Diff 纵切和 Ticket 10 Verify/Commit/FinalVerify 实现。Ticket 06 的真实 Codex/原生 Windows 验收，以及本次按用户授权跳过的 Ticket 09/M7 真实验收仍是独立证据缺口；它们不能由 fake 测试或编译替代。`.agents/`、`.codex/` 和 `.idea/` 属于工作区或 IDE 工具目录，不纳入项目架构导航。
 
@@ -153,6 +153,7 @@ Daemon → contracts/worker → Worker
 | Ticket 02 实现 | `docs/FE20260903080401/tickets/02-local-state-and-boundary-contracts/` | spec、子 Ticket、localstate/migration/Contract 实现与验收记录 |
 | 运行术语与长期决策 | `CONTEXT.md`、`docs/adr/` | 术语消歧与已接受的本机 Daemon 控制边界 |
 | Dashboard Observation | `contracts/controlplane/observation.go`、`internal/daemon/observation_http.go`、`dashboard/src/` | Project inventory、Change Observation、Needs Human、SSE refresh hint 和有限 Command/Decision UI |
+| Ticket 12 Golden Path | `scripts/golden-path-e2e.sh`、`testdata/golden-path-demo/`、`docs/FE20260903080401/tickets/12-golden-path-e2e/` | Fixture、受控 bootstrap/preflight、公开生命周期驱动、Candidate/Dashboard 观察和 Review Packet；真实 Codex/双平台 Evidence 仍未形成 |
 
 规则、修改前阅读顺序和验证要求见 `AGENTS.md`；本表只提供定位关系。
 
@@ -170,6 +171,6 @@ Daemon → contracts/worker → Worker
 
 - 生成日期：`2026-09-09`。
 - Graphify 输出、CodeMap 输出和 MCP 代码地图：当前未发现。
-- `CONTEXT.md` 与 `docs/adr/0001-local-daemon-control-plane.md` 记录本机 Daemon 控制边界；Ticket 04/05/11 的实际代码以当前 checkout 为准。
+- `CONTEXT.md` 与 `docs/adr/0001-local-daemon-control-plane.md` 记录本机 Daemon 控制边界；Ticket 04/05/11/12 的实际代码以当前 checkout 为准。
 - `Makefile` 提供根级验证入口；`dashboard/`、`contracts/{controlplane,worker}/`、Daemon、Project/Change HTTP/CLI、Worker Protocol/authority、`internal/{worker,execution,planning,governance}` 与 `internal/infrastructure/{config,logging,id,localstate,migration,manifest,repository,sourcecontrol,artifact,workstore}/` 已落地。Ticket 11 的 Query/SSE/静态托管和页面代码已实现；M7/M8 真实验收按用户授权跳过，真实 Codex、原生 Windows、浏览器和下游生产链证据仍未形成。
-- 新增实现、创建目标目录或刷新架构 / 代码地图后，本索引需要重新对齐。
+- Ticket 12 Runner/Fixture 已落地，但本次按用户授权偏离 `BLOCKED_BY: 11` 的实现不改变前置证据事实；新增实现、创建目标目录或刷新架构 / 代码地图后，本索引需要重新对齐。

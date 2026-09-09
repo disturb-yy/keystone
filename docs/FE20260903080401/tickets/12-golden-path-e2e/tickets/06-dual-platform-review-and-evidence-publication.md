@@ -1,6 +1,6 @@
 # 12-06：双平台 Review 与 Evidence 发布
 
-> 状态：`ready-for-agent`（仅表示规划成熟度，尚未实现）。父 Ticket：[12 Golden Path E2E Evidence](../../12-golden-path-e2e.md)；规格：[12-golden-path-e2e-spec.md](../spec/12-golden-path-e2e-spec.md)。
+> 状态：`implemented-unverified`（Review Packet 代码已落地，尚未形成独立审阅或 Evidence）。本次按用户授权偏离上游阻塞；父 Ticket：[12 Golden Path E2E Evidence](../../12-golden-path-e2e.md)；规格：[12-golden-path-e2e-spec.md](../spec/12-golden-path-e2e-spec.md)。
 >
 > 顶层硬阻塞：Ticket 11 的真实 acceptance evidence 未形成前不得开始实现；Linux 与 WSL 的独立可用环境也是本子票的外部执行前置。
 
@@ -8,7 +8,7 @@
 
 **Blocked by：** Ticket 11 的真实 acceptance evidence；12-05 Candidate 服务与 Production Dashboard 观察；独立非 WSL Linux host/VM 与 WSL 的真实 Codex 可用环境。
 
-**Status：** ready-for-agent（仅文档成熟度）
+**Status：** implemented-unverified（仅表示代码已落地，不表示 GoldenPathEvidence）
 
 ## Scope
 
