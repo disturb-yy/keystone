@@ -47,6 +47,17 @@ export interface ChangeSummary {
   updated_at: string
 }
 
+/** ChangeCreateRequest 是创建 Change 时发送给 Daemon 的最小写入边界。 */
+export interface ChangeCreateRequest {
+  repository_path: string
+  intent: string
+}
+
+/** ChangeCreateResponse 是 Daemon 接受创建请求后的权威 Change 回执。 */
+export interface ChangeCreateResponse {
+  change: ChangeSummary & { repository_root: string }
+}
+
 export interface ProjectChangesResponse extends PageInfo {
   project_id: string
   changes: ChangeSummary[]
@@ -266,5 +277,19 @@ export function sendDecision(
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Idempotency-Key': idempotencyKey },
     body: JSON.stringify({ decision, expected_version: expectedVersion, reason: reason || undefined }),
+  })
+}
+
+/** DaemonStatusResponse 是 Dashboard 顶部可展示的本机 Daemon 权威状态。 */
+export interface DaemonStatusResponse {
+  daemon_readiness: boolean
+}
+
+/** createChange 仅提交已注册 Project 的 repository root 与未经改写的 Intent。 */
+export function createChange(requestBody: ChangeCreateRequest, idempotencyKey: string): Promise<ChangeCreateResponse> {
+  return request<ChangeCreateResponse>('/v1/changes', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Idempotency-Key': idempotencyKey },
+    body: JSON.stringify(requestBody),
   })
 }

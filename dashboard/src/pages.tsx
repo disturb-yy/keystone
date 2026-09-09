@@ -1,16 +1,24 @@
-import { useState } from 'react'
-import type { ReactElement } from 'react'
-import { Link, useOutletContext, useParams } from 'react-router-dom'
+import { useEffect, useState } from 'react'
+import type { ChangeEvent as InputChangeEvent, FormEvent, ReactElement } from 'react'
+import { Link, useNavigate, useOutletContext, useParams } from 'react-router-dom'
 import type { PrimaryTableCol } from 'tdesign-react'
 import { Alert, Button, Card, Drawer, Space, Statistic, Steps, Table, Tag, Textarea, Timeline, Typography } from 'tdesign-react'
 import { RefreshIcon } from 'tdesign-icons-react'
 
-import { APIError, sendCommand, sendDecision, type AgentRun, type ArtifactRef, type ChangeEvent, type ChangeObservation, type ChangeSummary, type HumanDecision, type NeedsHumanItem, type ProjectSummary, type TicketGraph } from './api'
+import { APIError, createChange, sendCommand, sendDecision, type AgentRun, type ArtifactRef, type ChangeEvent, type ChangeObservation, type ChangeSummary, type HumanDecision, type NeedsHumanItem, type ProjectSummary, type TicketGraph } from './api'
 import { useQuery } from './hooks'
 import type { ShellContext } from './components'
 import { EmptyState, ErrorState, LinkButton, PageHeader, QueryNotice, SectionCard, StatusTag, StreamBanner } from './components'
 
 const lifecycleStages = ['Intent', 'Understand', 'Design', 'Plan', 'Ticketize', 'Execute', 'Verify', 'FinalVerify']
+const changeDraftStorageKey = 'keystone.create-change.draft'
+
+interface ChangeDraft {
+  projectID: string
+  intent: string
+  idempotencyKey: string
+  keyMode: 'automatic' | 'manual'
+}
 
 function usePageContext(): ShellContext {
   return useOutletContext<ShellContext>()
@@ -23,6 +31,55 @@ function formatTime(value?: string): string {
 
 function requestKey(): string {
   return typeof crypto.randomUUID === 'function' ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`
+}
+
+function newChangeDraft(): ChangeDraft {
+  return { projectID: '', intent: '', idempotencyKey: requestKey(), keyMode: 'automatic' }
+}
+
+function readChangeDraft(): ChangeDraft {
+  const fallback = newChangeDraft()
+  try {
+    const stored = sessionStorage.getItem(changeDraftStorageKey)
+    if (!stored) return fallback
+    const parsed = JSON.parse(stored) as Partial<ChangeDraft>
+    if (typeof parsed.projectID !== 'string' || typeof parsed.intent !== 'string' || typeof parsed.idempotencyKey !== 'string') return fallback
+    return { ...fallback, ...parsed, keyMode: parsed.keyMode === 'manual' ? 'manual' : 'automatic' }
+  } catch {
+    return fallback
+  }
+}
+
+function changeDraftError(error: APIError | Error): string {
+  if (!(error instanceof APIError)) return '无法连接本机 Daemon。请确认服务运行后重试；当前输入已保留。'
+  if (error.code === 'project_not_found') return '所选 Project 已不再注册。请刷新列表后重新选择；当前 Intent 已保留。'
+  if (error.code === 'idempotency_conflict') return '此幂等键已对应另一条创建请求。请核对高级设置，或生成新的自动幂等键。'
+  if (error.code === 'unavailable') return 'Daemon 暂时不可用。请稍后使用同一幂等键重试，避免重复创建。'
+  if (error.code === 'invalid_request') return 'Daemon 未接受该创建请求。请检查必填字段和高级幂等键。'
+  return `创建 Change 失败：${error.message}`
+}
+
+function useChangeDraft(): { draft: ChangeDraft; setIntent: (value: string) => void; setKey: (value: string) => void; setProjectID: (value: string) => void; resetKey: () => void } {
+  const [draft, setDraft] = useState<ChangeDraft>(readChangeDraft)
+
+  useEffect(() => {
+    sessionStorage.setItem(changeDraftStorageKey, JSON.stringify(draft))
+  }, [draft])
+
+  const updateFormValue = (field: 'intent' | 'projectID', value: string): void => {
+    setDraft((current) => {
+      if (current[field] === value) return current
+      return { ...current, [field]: value, idempotencyKey: current.keyMode === 'automatic' ? requestKey() : current.idempotencyKey }
+    })
+  }
+
+  return {
+    draft,
+    setIntent: (value) => updateFormValue('intent', value),
+    setProjectID: (value) => updateFormValue('projectID', value),
+    setKey: (value) => setDraft((current) => ({ ...current, idempotencyKey: value, keyMode: 'manual' })),
+    resetKey: () => setDraft((current) => ({ ...current, idempotencyKey: requestKey(), keyMode: 'automatic' })),
+  }
 }
 
 function ListPager({ hasMore, onNext }: { hasMore?: boolean; onNext: () => void }): ReactElement | null {
@@ -50,6 +107,96 @@ export function ProjectsPage(): ReactElement {
       <QueryNotice loading={query.loading} stale={query.stale} error={query.error} onRetry={() => setReload((value) => value + 1)} />
       {query.error && !query.data ? <ErrorState error={query.error} onRetry={() => setReload((value) => value + 1)} /> : query.data && query.data.projects.length === 0 ? <Card><EmptyState description="Daemon 尚未注册 Project。" /></Card> : query.data ? <Card className="table-card" title="Project inventory"><Table<ProjectSummary> rowKey="project_id" columns={columns} data={query.data.projects} disableDataPage bordered hover /></Card> : null}
       {query.data && <ListPager hasMore={query.data.has_more} onNext={() => setCursor(query.data?.next_cursor ?? '')} />}
+    </>
+  )
+}
+
+function CreateChangeForm({ projects, disabled, onCreated }: { projects: ProjectSummary[]; disabled: boolean; onCreated: (changeID: string) => void }): ReactElement {
+  const { draft, setIntent, setKey, setProjectID, resetKey } = useChangeDraft()
+  const [submitting, setSubmitting] = useState(false)
+  const [validationError, setValidationError] = useState('')
+  const [submitError, setSubmitError] = useState<APIError | Error>()
+  const selected = projects.find((project) => project.project_id === draft.projectID)
+
+  const onProjectChange = (event: InputChangeEvent<HTMLSelectElement>): void => {
+    setProjectID(event.currentTarget.value)
+    setValidationError('')
+    setSubmitError(undefined)
+  }
+
+  const onIntentChange = (event: InputChangeEvent<HTMLTextAreaElement>): void => {
+    setIntent(event.currentTarget.value)
+    setValidationError('')
+    setSubmitError(undefined)
+  }
+
+  const submit = async (event: FormEvent<HTMLFormElement>): Promise<void> => {
+    event.preventDefault()
+    if (!selected || !draft.intent.trim() || !draft.idempotencyKey.trim()) {
+      setValidationError('请选择已注册 Project，并填写非空 Intent 与幂等键。')
+      return
+    }
+    setSubmitting(true)
+    setSubmitError(undefined)
+    try {
+      const response = await createChange({ repository_path: selected.repository_root, intent: draft.intent }, draft.idempotencyKey)
+      sessionStorage.removeItem(changeDraftStorageKey)
+      onCreated(response.change.change_id)
+    } catch (caught) {
+      setSubmitError(caught instanceof Error ? caught : new Error('创建 Change 失败。'))
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  const submitDisabled = disabled || submitting || !selected || !draft.intent.trim() || !draft.idempotencyKey.trim()
+  return (
+    <Card className="change-create-card" title="Change 请求">
+      <form className="change-create-form" onSubmit={(event) => void submit(event)} noValidate>
+        <div className="form-field">
+          <label htmlFor="target-project">目标 Project <span aria-hidden="true">*</span></label>
+          <select id="target-project" value={draft.projectID} onChange={onProjectChange} disabled={disabled || submitting} required aria-required="true" aria-invalid={Boolean(validationError)} aria-describedby={validationError ? 'target-project-help change-create-validation' : 'target-project-help'} aria-errormessage={validationError ? 'change-create-validation' : undefined}>
+            <option value="">选择已注册 Project</option>
+            {projects.map((project) => <option key={project.project_id} value={project.project_id}>{project.repository_root} · {project.project_id}</option>)}
+          </select>
+          <p id="target-project-help">仅可选择 Daemon 已注册的 Project，不支持手工输入路径。</p>
+        </div>
+        <div className="form-field">
+          <label htmlFor="change-intent">Intent <span aria-hidden="true">*</span></label>
+          <textarea id="change-intent" value={draft.intent} onChange={onIntentChange} disabled={disabled || submitting} required aria-required="true" aria-invalid={Boolean(validationError)} aria-describedby={validationError ? 'change-intent-help change-create-validation' : 'change-intent-help'} aria-errormessage={validationError ? 'change-create-validation' : undefined} placeholder="描述希望 AI 完成的需求" rows={7} />
+          <p id="change-intent-help">Keystone 将原样保存并提交此输入，不会由浏览器改写。</p>
+        </div>
+        <details className="idempotency-disclosure">
+          <summary>高级：幂等键</summary>
+          <div className="form-field advanced-field">
+            <label htmlFor="idempotency-key">Idempotency Key</label>
+            <input id="idempotency-key" value={draft.idempotencyKey} onChange={(event) => setKey(event.currentTarget.value)} disabled={disabled || submitting} spellCheck="false" />
+            <div className="idempotency-actions"><span>{draft.keyMode === 'automatic' ? '自动键：表单变更时轮换，未变更重试时复用。' : '手动键：界面不会自动改写。'}</span><Button variant="text" type="button" onClick={resetKey} disabled={disabled || submitting}>生成自动键</Button></div>
+          </div>
+        </details>
+        {validationError && <div id="change-create-validation" role="alert"><Alert theme="warning" message={validationError} /></div>}
+        {submitError && <div className="create-error" role="alert"><Alert theme="error" message={changeDraftError(submitError)} /><details><summary>技术详情</summary><code>{submitError instanceof APIError ? submitError.code : 'network_error'}</code></details></div>}
+        <div className="change-create-actions"><LinkButton to="/">取消</LinkButton><Button theme="primary" type="submit" loading={submitting} disabled={submitDisabled}>创建 Change</Button></div>
+      </form>
+    </Card>
+  )
+}
+
+export function CreateChangePage(): ReactElement {
+  const { refreshVersion, streamStatus } = usePageContext()
+  const [reload, setReload] = useState(0)
+  const navigate = useNavigate()
+  const query = useQuery<{ projects: ProjectSummary[] }>('/v1/projects?limit=50', refreshVersion + reload)
+  const projects = query.data?.projects ?? []
+  const isEmpty = Boolean(query.data) && projects.length === 0
+  const isUnavailable = Boolean(query.error) || !query.data
+
+  return (
+    <>
+      <StreamBanner status={streamStatus} />
+      <PageHeader eyebrow="Intent intake" title="Create Change" description="把原始需求提交给一个明确选择的已注册 Project；创建成功后进入其权威详情页。" />
+      <QueryNotice loading={query.loading} stale={query.stale} error={query.error} onRetry={() => setReload((value) => value + 1)} />
+      {isEmpty ? <Card className="create-empty-card"><EmptyState description="Daemon 尚未注册 Project。请先在目标仓库运行 keystone init，再返回此页刷新。" /><code className="cli-guidance">keystone init</code><div className="change-create-actions"><Button variant="outline" icon={<RefreshIcon />} onClick={() => setReload((value) => value + 1)}>刷新 Project</Button><button className="empty-disabled-create" type="button" disabled>创建 Change</button></div></Card> : <CreateChangeForm projects={projects} disabled={isUnavailable} onCreated={(changeID) => navigate(`/changes/${encodeURIComponent(changeID)}`)} />}
     </>
   )
 }
@@ -139,6 +286,14 @@ function TraceView({ events, runs, decisions }: { events: ChangeEvent[]; runs: A
   return <div className="trace-layout"><div><Typography.Title level="h5">Events</Typography.Title>{events.length === 0 ? <EmptyState description="暂无 Event。" /> : <Timeline>{events.map((event) => <Timeline.Item key={event.event_id} label={`#${event.sequence} · ${formatTime(event.occurred_at)}`}><strong>{event.type}</strong><Typography.Text theme="secondary"> · {event.actor || 'daemon'}</Typography.Text></Timeline.Item>)}</Timeline>}</div><div><Typography.Title level="h5">Agent Runs</Typography.Title>{runs.length === 0 ? <EmptyState description="暂无 AgentRun。" /> : runs.map((run) => <div className="trace-row" key={run.agent_run_id}><StatusTag value={run.status} /><span>{run.stage} · attempt {run.attempt}</span><Typography.Text theme="secondary">{run.outcome || 'running'}</Typography.Text></div>)}</div><div><Typography.Title level="h5">Human Decisions</Typography.Title>{decisions.length === 0 ? <EmptyState description="暂无 HumanDecision。" /> : decisions.map((decision) => <div className="trace-row" key={decision.decision_id}><StatusTag value={decision.decision} /><span>{decision.actor}</span><Typography.Text theme="secondary">{decision.reason || '—'}</Typography.Text></div>)}</div></div>
 }
 
+function AuthoritySummary({ observation }: { observation: ChangeObservation }): ReactElement {
+  return <Card className="authority-summary" title="权威状态"><div className="authority-summary__rows"><div><span>Lifecycle</span><StatusTag value={observation.lifecycle.status} /></div><div><span>Stage</span><strong>{observation.lifecycle.stage}</strong></div><div><span>Version</span><strong>{observation.lifecycle.version}</strong></div><div><span>Observed</span><time dateTime={observation.observed_at}>{formatTime(observation.observed_at)}</time></div></div></Card>
+}
+
+function ChangeObservationLayout({ observation, onComplete }: { observation: ChangeObservation; onComplete: () => void }): ReactElement {
+  return <div className="change-detail-layout"><div className="observation-stack change-detail-main"><LifecyclePanel observation={observation} /><SectionCard title="Canonical Ticket Graph" section={observation.ticket_graph}><TicketGraphView graph={observation.ticket_graph.graph} /></SectionCard><SectionCard title="Execution" section={observation.execution}><ExecutionView execution={observation.execution.execution} /></SectionCard><SectionCard title="Trace" section={observation.trace}><TraceView events={observation.trace.events} runs={observation.trace.runs} decisions={observation.trace.decisions} /></SectionCard><SectionCard title="Artifacts" section={observation.artifacts}>{observation.artifacts.artifacts.length === 0 ? <EmptyState description="暂无 ArtifactRef。" /> : <ArtifactTable artifacts={observation.artifacts.artifacts} />}</SectionCard></div><aside className="authority-rail" aria-label="Change 权威状态"><AuthoritySummary observation={observation} /><ActionPanel observation={observation} onComplete={onComplete} /><SectionCard title="Daemon / Worker Health" section={observation.health}><HealthTable observation={observation} /></SectionCard></aside></div>
+}
+
 function ChangeObservationPage(): ReactElement {
   const { change_id: changeID = '' } = useParams()
   const { refreshVersion, streamStatus } = usePageContext()
@@ -150,7 +305,7 @@ function ChangeObservationPage(): ReactElement {
       <StreamBanner status={streamStatus} />
       <PageHeader eyebrow="Change detail" title={observation?.change.change_id ?? changeID} description="所有 section 都来自 Daemon Query；刷新提示不会携带或推导业务状态。" actions={<Space><LinkButton to={observation ? `/projects/${observation.project.project_id}` : '/'}>返回 Project</LinkButton><Button variant="outline" icon={<RefreshIcon />} onClick={() => setReload((value) => value + 1)}>刷新</Button></Space>} />
       <QueryNotice loading={query.loading} stale={query.stale} error={query.error} onRetry={() => setReload((value) => value + 1)} />
-      {query.error && !observation ? <ErrorState error={query.error} onRetry={() => setReload((value) => value + 1)} /> : observation ? <div className="observation-stack"><ActionPanel observation={observation} onComplete={() => setReload((value) => value + 1)} /><LifecyclePanel observation={observation} /><SectionCard title="Canonical Ticket Graph" section={observation.ticket_graph}><TicketGraphView graph={observation.ticket_graph.graph} /></SectionCard><SectionCard title="Execution" section={observation.execution}><ExecutionView execution={observation.execution.execution} /></SectionCard><SectionCard title="Trace" section={observation.trace}><TraceView events={observation.trace.events} runs={observation.trace.runs} decisions={observation.trace.decisions} /></SectionCard><SectionCard title="Artifacts" section={observation.artifacts}>{observation.artifacts.artifacts.length === 0 ? <EmptyState description="暂无 ArtifactRef。" /> : <ArtifactTable artifacts={observation.artifacts.artifacts} />}</SectionCard><SectionCard title="Daemon / Worker Health" section={observation.health}><HealthTable observation={observation} /></SectionCard></div> : null}
+      {query.error && !observation ? <ErrorState error={query.error} onRetry={() => setReload((value) => value + 1)} /> : observation ? <ChangeObservationLayout observation={observation} onComplete={() => setReload((value) => value + 1)} /> : null}
     </>
   )
 }

@@ -7,11 +7,11 @@ import './styles.css'
 
 import { DashboardShell, type ShellContext } from './components'
 import { useRefreshStream, type StreamStatus } from './hooks'
-import { ChangeDetailPage, NeedsHumanPage, ProjectDetailPage, ProjectsPage } from './pages'
+import { ChangeDetailPage, CreateChangePage, NeedsHumanPage, ProjectDetailPage, ProjectsPage } from './pages'
 
 function ShellRoute({ refreshVersion, streamStatus }: ShellContext): ReactElement {
   return (
-    <DashboardShell>
+    <DashboardShell refreshVersion={refreshVersion}>
       <div className="shell-stream-context"><Outlet context={{ refreshVersion, streamStatus } satisfies ShellContext} /></div>
     </DashboardShell>
   )
@@ -29,6 +29,7 @@ function App(): ReactElement {
         <Route element={<ShellRoute refreshVersion={refreshVersion} streamStatus={streamStatus} />}>
           <Route path="/" element={<ProjectsPage />} />
           <Route path="/projects/:project_id" element={<ProjectDetailPage />} />
+          <Route path="/changes/new" element={<CreateChangePage />} />
           <Route path="/changes/:change_id" element={<ChangeDetailPage />} />
           <Route path="/needs-human" element={<NeedsHumanPage />} />
         </Route>

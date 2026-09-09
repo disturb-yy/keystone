@@ -1,0 +1,132 @@
+{
+  "version": 1,
+  "task_id": "dashboard-create-change-2026-09-10",
+  "actor_id": "/root",
+  "actor_skill": "coding-frontend",
+  "classification": "Large",
+  "phase": "implementation",
+  "active_gate": "G6",
+  "next_action": "verify",
+  "objective": "将获批准的深色 Dashboard 视觉系统和 Create Change 纵向路径实现到现有 React/Vite 客户端。",
+  "scope": [
+    "新增 /changes/new 页面、仅注册 Project 下拉选择、原始 Intent、会话草稿、幂等键和错误反馈",
+    "在既有四个页面和新页面统一应用已批准的深色开发者控制台样式，并完成 Change Detail 权威栏与顶部权威状态",
+    "为真实前端请求边界增加浏览器端回归测试",
+    "更新根级导航，使其反映已形成的实现事实"
+  ],
+  "required_skills": [
+    "coding-frontend",
+    "coding-project",
+    "reviewing-ui"
+  ],
+  "inputs": {
+    "repository_root": "/home/jadon/projects/go/keystone",
+    "project_slug": "keystone",
+    "master_design_system": "dashboard/DESIGN.md",
+    "page_override": "dashboard/DESIGN.md#Create Change",
+    "wireframe": "wireframes/dashboard.md",
+    "visual_prototype": "prototypes/dashboard.html",
+    "api_contracts": [
+      "contracts/controlplane/contract.go",
+      "contracts/controlplane/observation.go",
+      "internal/daemon/change_http.go"
+    ]
+  },
+  "approvals": {
+    "design_system": {
+      "status": "approved",
+      "evidence": "用户在本会话确认深色开发者控制台的 DESIGN.md 方向。",
+      "skip_reason": ""
+    },
+    "wireframe": {
+      "status": "approved",
+      "evidence": "用户在本会话对五页信息架构、Create Change 状态和 API 映射选择全部按推荐。",
+      "skip_reason": ""
+    },
+    "visual_prototype": {
+      "status": "approved",
+      "evidence": "用户回复 可以，确认，以此前展示的高保真 mock 原型为生产实现依据。",
+      "skip_reason": ""
+    },
+    "implementation_contract": {
+      "status": "approved",
+      "evidence": "用户回复 可以，确认，接受此前说明的仅改 Dashboard、测试和导航文档的生产实施范围。",
+      "skip_reason": ""
+    }
+  },
+  "ownership": {
+    "writable_paths": [
+      "ui-contracts/dashboard-create-change.json",
+      "dashboard/src/api.ts",
+      "dashboard/src/components.tsx",
+      "dashboard/src/main.tsx",
+      "dashboard/src/pages.tsx",
+      "dashboard/src/styles.css",
+      "dashboard/e2e/change-create.spec.ts",
+      "dashboard/playwright.config.ts",
+      "dashboard/package.json",
+      "README.md",
+      "INDEX.md"
+    ],
+    "read_only_paths": [
+      "dashboard/DESIGN.md",
+      "wireframes/dashboard.md",
+      "prototypes/dashboard.html",
+      "contracts/controlplane/**",
+      "internal/daemon/**"
+    ],
+    "forbidden_paths": [
+      "contracts/**",
+      "internal/**",
+      "cmd/**",
+      "go.mod",
+      "go.sum",
+      "dashboard/package-lock.json",
+      "migrations/**"
+    ]
+  },
+  "design_constraints": {
+    "may_change_layout": true,
+    "may_change_tokens": false,
+    "may_change_interaction": false,
+    "may_change_component_api": false,
+    "may_add_dependency": false,
+    "may_change_information_hierarchy": false
+  },
+  "validation": [
+    "python3 /home/jadon/.agents/skills/ui-ux-control-plane/scripts/validate_contract.py ui-contracts/dashboard-create-change.json",
+    "npm run lint",
+    "npm run build",
+    "npm run test:e2e",
+    "浏览器在 375、768、1024、1440 宽度验证 /changes/new 的默认、loading、empty、error 和提交成功路径",
+    "git diff --check",
+    "独立 reviewing-ui 复核固定差异目标"
+  ],
+  "review": {
+    "required": true,
+    "implementation_actor_id": "/root",
+    "reviewer_actor_id": "/root/dashboard_ui_reviewer",
+    "target": {
+      "kind": "stable_artifact",
+      "stable_id": "dashboard-create-change-2026-09-10"
+    },
+    "blocking_findings": []
+  },
+  "expected_output": {
+    "format": "实施与独立 UI 复核报告",
+    "must_report": [
+      "changed_files",
+      "artifact_version",
+      "review_risk_tags",
+      "validation_commands",
+      "validation_results",
+      "residual_risks",
+      "运行时路由、状态和视口证据"
+    ]
+  },
+  "stop_if": [
+    "既有 Control Plane API 无法表达已批准的 Create Change 请求边界",
+    "实现需要新增依赖、修改后端契约或改变已批准交互",
+    "独立 UI 复核发现阻断性偏离且不能在既有范围内修复"
+  ]
+}

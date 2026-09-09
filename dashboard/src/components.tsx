@@ -3,7 +3,8 @@ import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { Alert, Button, Card, Empty, Layout, Menu, Tag, Typography } from 'tdesign-react'
 import { DashboardIcon, ErrorCircleIcon, FactCheckIcon, RefreshIcon } from 'tdesign-icons-react'
 
-import { APIError, type Availability, type ObservationSection } from './api'
+import { APIError, type Availability, type DaemonStatusResponse, type ObservationSection } from './api'
+import { useQuery } from './hooks'
 import type { StreamStatus } from './hooks'
 
 export interface ShellContext {
@@ -11,10 +12,13 @@ export interface ShellContext {
   streamStatus: StreamStatus
 }
 
-export function DashboardShell({ children }: { children: ReactNode }): ReactElement {
+export function DashboardShell({ children, refreshVersion }: { children: ReactNode; refreshVersion: number }): ReactElement {
   const location = useLocation()
   const navigate = useNavigate()
-  const menuValue = location.pathname.startsWith('/needs-human') ? '/needs-human' : location.pathname === '/' ? '/' : '/'
+  const daemon = useQuery<DaemonStatusResponse>('/v1/daemon/status', refreshVersion)
+  const menuValue = location.pathname.startsWith('/needs-human') ? '/needs-human' : location.pathname === '/changes/new' ? '/changes/new' : '/'
+  const readiness = daemon.data?.daemon_readiness
+  const statusText = readiness === true ? 'Daemon 已就绪' : readiness === false ? 'Daemon 未就绪' : daemon.error ? 'Daemon 状态不可用' : '正在读取 Daemon 状态'
   return (
     <Layout className="app-layout">
       <Layout.Header className="app-header">
@@ -25,17 +29,20 @@ export function DashboardShell({ children }: { children: ReactNode }): ReactElem
             <Typography.Text className="brand-subtitle">Control Plane Observation</Typography.Text>
           </div>
         </div>
-        <div className="header-status">
+        <div className={`header-status header-status--${readiness === true ? 'ready' : readiness === false ? 'not-ready' : 'unknown'}`} role="status">
           <span className="status-dot" aria-hidden="true" />
-          <span>本机 Daemon</span>
+          <span>{statusText}</span>
         </div>
       </Layout.Header>
       <Layout>
         <Layout.Aside className="app-aside">
-          <Menu value={menuValue} onChange={(value) => navigate(String(value))}>
-            <Menu.MenuItem value="/" icon={<DashboardIcon />}>Projects</Menu.MenuItem>
-            <Menu.MenuItem value="/needs-human" icon={<FactCheckIcon />}>Needs Human</Menu.MenuItem>
-          </Menu>
+          <nav aria-label="主导航">
+            <Menu value={menuValue} onChange={(value) => navigate(String(value))}>
+              <Menu.MenuItem value="/" icon={<DashboardIcon />}>Projects</Menu.MenuItem>
+              <Menu.MenuItem value="/changes/new" icon={<DashboardIcon />}>Create Change</Menu.MenuItem>
+              <Menu.MenuItem value="/needs-human" icon={<FactCheckIcon />}>Needs Human</Menu.MenuItem>
+            </Menu>
+          </nav>
         </Layout.Aside>
         <Layout.Content className="app-content">
           <div className="content-frame">{children}</div>

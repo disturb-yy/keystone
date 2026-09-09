@@ -4,22 +4,22 @@
 
 Keystone Dashboard 是本机单操作者使用的 Control Plane Client，用于观察 Project、Change、Ticket、运行证据和人工恢复事项。它面向需要确认系统当前权威事实、检查证据链并提交有限恢复决定的工程人员。
 
-产品气质是冷静、清晰、可追溯的工程控制台：信息密度高但不拥挤，状态优先于装饰，所有重要状态都同时使用文字和语义颜色表达。
+产品气质是深色、克制、可追溯的开发者控制台：信息密度高但不拥挤，状态优先于装饰，所有重要状态都同时使用文字和语义颜色表达。
 
 ## Evidence Inventory
 
 ### 已确认输入
 
 - [Ticket 11 — Dashboard Observation](../docs/FE20260903080401/tickets/11-dashboard-observation.md)：固定四个页面、Daemon 托管、Query 优先、SSE 只作刷新提示以及 Command/Decision 边界。
-- 本次对齐结论：同源生产托管、显式 URL 路由、浅色主题、桌面优先的响应式布局、TDesign React 组件、无 optimistic update 和有界 Trace/Artifact 展示。
-- [当前 Dashboard 入口](./src/main.tsx) 与 [当前样式](./src/styles.css)：已落地蓝灰色、浅色画布、白色表面和深蓝文字基调，以及四个固定页面的 Query/状态展示。
+- 已确认的视觉基线：同源生产托管、显式 URL 路由、深色开发者控制台、桌面优先的响应式布局、TDesign React 组件、无 optimistic update 和有界 Trace/Artifact 展示。
+- [当前 Dashboard 入口](./src/main.tsx) 与 [当前样式](./src/styles.css)：五个页面已共用本文件的深色 token、导航和响应式 shell；Create Change 的具体写入边界由实施契约约束。
 - [Dashboard package](./package.json)：当前使用 React、TypeScript、Vite、TDesign React、TDesign icons 和 React Router，依赖版本已写入锁文件。
 - `tdesign-mcp-server` React 组件清单、组件文档和 DOM 资料：确认使用 `Layout`、`Menu`、`Breadcrumb`、`Card`、`Table`、`Tree`、`Timeline`、`Tag`、`Alert`、`Dialog`、`Drawer`、`Skeleton`、`Empty`、`Result`、`Button`、`Popconfirm`、`Statistic`、`Space`、`Typography` 等组件。
 
 ### Fallback 输入
 
 - 当前仓库没有品牌规范、设计稿或既有 MASTER/page override。
-- `designing-ui-system` 的 UI UX Pro Max 搜索脚本未找到；以下颜色、尺寸和动效数值是结合当前骨架样式、TDesign 语义和 Keystone 控制台语境作出的 fallback 选择。
+- UI UX Pro Max 搜索脚本未找到；以下颜色、尺寸和动效数值是结合已确认的深色开发者控制台方向、TDesign 语义和 Keystone 控制台语境作出的 fallback 选择。
 
 ## Design Principles
 
@@ -36,10 +36,10 @@ Keystone Dashboard 是本机单操作者使用的 Control Plane Client，用于�
 
 - 使用 TDesign `Layout` 组合 `Header`、`Aside` 和 `Content`。
 - 桌面端侧边栏宽度为 `232px`，折叠后为 `64px`；顶部栏高度为 `64px`。
-- 侧边导航使用 TDesign `Menu`，固定入口为 `Projects` 和 `Needs Human`；详情页通过 `Breadcrumb` 返回所属 Project 或 Change。
+- 侧边导航使用 TDesign `Menu`，固定入口为 `Projects`、`Create Change` 和 `Needs Human`；详情页通过 `Breadcrumb` 返回所属 Project 或 Change。
 - 顶部栏显示 `Keystone`、当前 Daemon readiness、Worker health 摘要和数据新鲜度；不显示 `database_path`、WorkspacePath、Lease 或 secret。
 - 主内容区域默认内边距 `24px`，最大内容宽度 `1440px`，避免超宽屏上信息行过长。
-- `/` 默认进入 Projects；详情路由固定为 `/projects/:project_id`、`/changes/:change_id`、`/needs-human`。
+- `/` 默认进入 Projects；创建页路由为 `/changes/new`，详情路由固定为 `/projects/:project_id`、`/changes/:change_id`、`/needs-human`。
 - Daemon 对前端未知路径回退 `index.html`，`/v1` 和 SSE 路径不参与 SPA 回退。
 
 ### Page composition
@@ -57,34 +57,34 @@ Keystone Dashboard 是本机单操作者使用的 Control Plane Client，用于�
 
 | Token | Value | 用途 |
 | --- | --- | --- |
-| `--ks-color-canvas` | `#F3F6FA` | 页面背景；延续当前骨架的浅灰蓝画布 |
-| `--ks-color-surface` | `#FFFFFF` | 卡片、表格和对话框表面 |
-| `--ks-color-surface-subtle` | `#F7F9FC` | 表头、次级区域和 hover 背景 |
-| `--ks-color-text-primary` | `#1F304B` | 主标题、关键字段和 ID 标签 |
-| `--ks-color-text-secondary` | `#526984` | 描述、辅助信息和次级字段 |
-| `--ks-color-text-muted` | `#8C9AAC` | 时间、弱提示和非关键元数据 |
-| `--ks-color-border` | `#D5DFEC` | 卡片、输入框和表格边界 |
-| `--ks-color-divider` | `#E7ECF3` | 内容分割线 |
+| `--ks-color-canvas` | `#0B1020` | 页面背景；深色控制台的稳定底色 |
+| `--ks-color-surface` | `#111A2E` | 卡片、表格和对话框表面 |
+| `--ks-color-surface-subtle` | `#17233D` | 表头、次级区域和 hover 背景 |
+| `--ks-color-text-primary` | `#F2F6FC` | 主标题、关键字段和 ID 标签 |
+| `--ks-color-text-secondary` | `#AAB9D0` | 描述、辅助信息和次级字段 |
+| `--ks-color-text-muted` | `#73829A` | 时间、弱提示和非关键元数据 |
+| `--ks-color-border` | `#2A3854` | 卡片、输入框和表格边界 |
+| `--ks-color-divider` | `#1F2C45` | 内容分割线 |
 
 ### Brand
 
 | Token | Value | 用途 |
 | --- | --- | --- |
-| `--ks-color-brand-700` | `#003CAB` | active、focus 和深色品牌文本 |
-| `--ks-color-brand-600` | `#0052D9` | 主按钮、链接和运行中状态 |
-| `--ks-color-brand-500` | `#366EF4` | hover 和交互强调 |
-| `--ks-color-brand-100` | `#E8F3FF` | 信息提示、选中背景和浅色品牌区域 |
+| `--ks-color-brand-700` | `#245FCB` | active、focus 和深色品牌文本 |
+| `--ks-color-brand-600` | `#3B82F6` | 主按钮、链接和运行中状态 |
+| `--ks-color-brand-500` | `#6EA8FE` | hover 和交互强调 |
+| `--ks-color-brand-100` | `#152C53` | 信息提示、选中背景和深色品牌区域 |
 
 ### Semantic status
 
 | 领域语义 | TDesign 主题 | Foreground | Background | 使用规则 |
 | --- | --- | --- | --- | --- |
-| `active` / `running` / `info` | `primary` | `#0052D9` | `#E8F3FF` | 表示正在协调或需要关注的正常进展 |
-| `pending` / `paused` / `cancelled` | `default` | `#526984` | `#F3F6FA` | 表示等待、暂停或结束，不表示错误 |
-| `human_required` / `HUMAN_REQUIRED` | `warning` | `#E37318` | `#FFF1E9` | 明确需要人工查看或决定 |
-| `failed` / `FAIL` / `error` | `danger` | `#D54941` | `#FFF0ED` | 表示已确认失败或请求错误 |
-| `integrate_ready` / `PASS` / `success` | `success` | `#2BA471` | `#E8FFEA` | 表示已形成对应的权威成功事实 |
-| `unavailable` / `degraded` | `warning` | `#E37318` | `#FFF1E9` | 表示暂时不可用；不得自动升级为 human required |
+| `active` / `running` / `info` | `primary` | `#80B5FF` | `#122C50` | 表示正在协调或需要关注的正常进展 |
+| `pending` / `paused` / `cancelled` | `default` | `#AAB9D0` | `#17233D` | 表示等待、暂停或结束，不表示错误 |
+| `human_required` / `HUMAN_REQUIRED` | `warning` | `#F4B75E` | `#3A2610` | 明确需要人工查看或决定 |
+| `failed` / `FAIL` / `error` | `danger` | `#FF9AA2` | `#3B1C24` | 表示已确认失败或请求错误 |
+| `integrate_ready` / `PASS` / `success` | `success` | `#7DDAA7` | `#123523` | 表示已形成对应的权威成功事实 |
+| `unavailable` / `degraded` | `warning` | `#F4B75E` | `#3A2610` | 表示暂时不可用；不得自动升级为 human required |
 
 状态颜色不能改变领域语义。`human_required` 不等于 `failed`，`unavailable` 不等于 `human_required`，`integrate_ready` 也不表示已经 merge、push 或 deploy。
 
@@ -164,6 +164,16 @@ Keystone Dashboard 是本机单操作者使用的 Control Plane Client，用于�
 | Command / Decision | `Button`、`Dialog`、`Popconfirm` | 以 Daemon 返回的 `available_actions` 为准 |
 | Loading / empty / error | `Skeleton`、`Empty`、`Alert`、`Result`、`Loading` | 每种状态有明确中文文案和重新查询入口 |
 
+### Create Change
+
+- 使用独立的 `/changes/new` 页面；成功创建后跳转到 Daemon 返回的 Change 详情页。
+- Project 必须由已注册 Project 的下拉框明确选择，选项同时显示 repository root 与 Project ID；不提供任意路径输入。
+- 没有已注册 Project 时禁用提交，并显示可复制的 `keystone init` 引导；页面不提供 Project 初始化写操作。
+- Intent 使用必填多行输入框，拒绝仅由空白组成的内容，并将非空内容原样提交为 `intent`。
+- 幂等键默认由界面生成；高级区允许用户查看和手动覆盖。未修改表单的重试复用自动键，修改 Project 或 Intent 后生成新自动键；手动键由用户负责保持。
+- Project 选择、Intent 和自动幂等键保存至当前浏览器会话，关闭浏览器后清除。
+- 提交期间禁用表单和重复提交；失败时保留全部输入，提供中文恢复说明，并在高级详情显示服务端错误码。
+
 ## Forms and Feedback
 
 - Pause、Resume、Cancel、Retry 统一使用 `Dialog` 或 `Popconfirm`；Cancel 使用 `danger`，Retry 使用 `primary`。
@@ -197,7 +207,7 @@ Ticket 11 不引入业务图表。可视化只服务于观察：
 - `<768px`：侧边栏折叠为可打开导航，所有卡片单列，Trace 和 Health 纵向排列。
 - 表格不强制压缩技术字段；窄屏允许水平滚动，关键状态和操作列保持可见。
 - `Tree` 和 `Timeline` 在窄屏保留语义顺序，不改为仅颜色或图标表达。
-- 不建设独立移动端信息架构，不改变四个固定页面和 URL 路由。
+- 不建设独立移动端信息架构，不改变五个固定页面和 URL 路由。
 
 ## Accessibility
 
@@ -207,7 +217,7 @@ Ticket 11 不引入业务图表。可视化只服务于观察：
 - Dialog 打开时焦点进入对话框，关闭后返回触发元素；危险操作必须能被屏幕阅读器理解。
 - 表格标题、状态列和依赖关系保持可读顺序；长 ID 使用可访问的完整文本或 tooltip。
 - 错误、断线、stale 和 Human Required 状态使用 `role="status"` 或 `role="alert"` 的合适语义，不频繁打断用户。
-- 颜色 token 需要在浅色画布上验证；不引入仅靠红绿区分的操作路径。
+- 颜色 token 需要在深色画布上验证；不引入仅靠红绿区分的操作路径。
 
 ## Loading, Empty, Error, Permission States
 
@@ -241,7 +251,7 @@ Ticket 11 不引入业务图表。可视化只服务于观察：
 - [ ] 生产代码中的 TDesign 组件/API 已通过 `tdesign-mcp-server` 的 React 文档核对。
 - [ ] 图标名称已通过 `search_icon` 核对，未使用临时 emoji 或未知 icon 名称。
 - [ ] `tdesign-react` 及必要的 `tdesign-icons-react` 依赖已写入 `package.json` 并锁定。
-- [ ] 四个 URL 页面共用同一 shell、语义 token 和状态映射。
+- [ ] 五个 URL 页面共用同一 shell、语义 token 和状态映射。
 - [ ] Query、SSE、Command 和 Decision 遵守 Ticket 11 的 Daemon authority 边界。
 - [ ] 初次 loading、empty、error、stale、断线、unavailable、Human Required 和冲突状态均可见。
 - [ ] 键盘操作、焦点、对比度、缩放和窄屏布局完成浏览器验证。
@@ -253,7 +263,8 @@ Ticket 11 不引入业务图表。可视化只服务于观察：
 | 日期 | 决策 | 原因 | 状态 |
 | --- | --- | --- | --- |
 | 2026-09-08 | 使用 TDesign React 作为 Dashboard 组件基础，并通过 `tdesign-mcp-server` 查询组件资料 | 保持组件行为、状态反馈和无障碍规则一致 | 当前设计基线 |
-| 2026-09-08 | 采用浅色蓝灰控制台视觉，品牌蓝作为唯一主强调色 | 延续现有骨架的蓝灰基调，并让生命周期状态与品牌交互区分 | 当前设计基线 |
+| 2026-09-08 | 采用浅色蓝灰控制台视觉，品牌蓝作为唯一主强调色 | 延续现有骨架的蓝灰基调，并让生命周期状态与品牌交互区分 | 已由 2026-09-10 决策替代 |
 | 2026-09-08 | 使用语义 status token，而不是页面级颜色 | 防止 `human_required`、`failed`、`unavailable` 等领域语义混淆 | 当前设计基线 |
 | 2026-09-08 | 采用 `Layout` + `Menu` + `Breadcrumb` 的桌面优先响应式 shell | 适配四个固定页面和本机工程控制台的高密度观察场景 | 当前设计基线 |
 | 2026-09-08 | 失败和断线保留最后快照并显式标记 stale | 让观察者区分旧事实、查询失败和权威状态变化 | 当前设计基线 |
+| 2026-09-10 | 采用深色开发者控制台视觉，并覆盖现有页面和 Create Change 页面 | 用户确认当前视觉不符合要求；统一深色 token、导航、表单与状态规则，避免新旧页面割裂 | 当前设计基线 |

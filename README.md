@@ -363,6 +363,9 @@ internal/governance/          Verification / Commit 领域模型
 internal/worker/              Worker loop 与验证执行
 internal/infrastructure/      SQLite、Git、Manifest、Artifact 等 Adapter
 dashboard/                    React、TypeScript、Vite、TDesign 界面
+wireframes/                   已批准的低保真界面结构，不表示生产页面已实现
+prototypes/                   高保真 mock 原型，用于视觉与交互审批，不访问 Daemon
+ui-contracts/                 已批准的前端实施边界、所有权与验证要求
 docs/                         版本化规格、验收要求与架构决策
 ```
 
@@ -382,4 +385,5 @@ git diff --check       # 文档与补丁空白检查
 - [工程规约](AGENTS.md)：修改规则、依赖方向和验证要求。
 - [领域术语](CONTEXT.md)：稳定概念与语义。
 - [架构决策](docs/adr/)：已记录的设计选择。
+- [Dashboard 设计基线](dashboard/DESIGN.md)、[Dashboard 线框](wireframes/dashboard.md)、[Dashboard 原型](prototypes/dashboard.html) 与 [Create Change 实施契约](ui-contracts/dashboard-create-change.json)：已确认的视觉、结构与写入边界；原型使用 mock 数据，不替代运行时验收。
 - [V1 实施文档](docs/FE20260903080401/)：Ticket、规格、里程碑与验收要求；规划内容以实际源码和验收证据区分状态。
