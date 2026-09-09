@@ -1,6 +1,6 @@
 # 12 — Golden Path E2E Evidence
 
-> 状态：验收契约已对齐，尚未实现或执行。`BLOCKED_BY: 11` 仍然有效；本文件不是成功证据，也不能把规划状态写成运行完成。
+> 状态：Fixture、Runner 与 Review Packet 实现已落地，尚未执行或通过真实双平台验收。本次按用户明确授权偏离实现，但 `BLOCKED_BY: 11` 作为交付前置证据事实仍然有效；本文件不是成功证据，也不能把实现状态写成运行完成。
 >
 > 本文顶层 `BLOCKED_BY: 11` 是版本化 ImplementationTicket 的交付前置条件；它不同于一个 Change 的 Canonical Ticket Graph 中 `blocked_by` 表达的 CanonicalTicket 依赖，二者不可互推。
 

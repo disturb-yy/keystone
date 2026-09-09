@@ -1,6 +1,6 @@
 # 12-01：Golden Path Fixture 与 Demo Service Baseline
 
-> 状态：`ready-for-agent`（仅表示规划成熟度，尚未实现）。父 Ticket：[12 Golden Path E2E Evidence](../../12-golden-path-e2e.md)；规格：[12-golden-path-e2e-spec.md](../spec/12-golden-path-e2e-spec.md)。
+> 状态：`implemented-unverified`（Fixture 代码已落地，尚未形成真实验收证据）。本次按用户授权偏离上游阻塞；父 Ticket：[12 Golden Path E2E Evidence](../../12-golden-path-e2e.md)；规格：[12-golden-path-e2e-spec.md](../spec/12-golden-path-e2e-spec.md)。
 >
 > 顶层硬阻塞：Ticket 11 的真实 acceptance evidence 未形成前，不得开始本子票实现。
 
@@ -8,7 +8,7 @@
 
 **Blocked by：** Ticket 11 的真实 acceptance evidence；没有其他 Ticket 12 子票前置。
 
-**Status：** ready-for-agent（仅文档成熟度）
+**Status：** implemented-unverified（仅表示代码已落地，不表示 GoldenPathEvidence）
 
 ## Scope
 

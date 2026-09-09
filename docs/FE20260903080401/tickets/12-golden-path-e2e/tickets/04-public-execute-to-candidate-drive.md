@@ -1,6 +1,6 @@
 # 12-04：公开 Execute 至 Candidate 驱动
 
-> 状态：`ready-for-agent`（仅表示规划成熟度，尚未实现）。父 Ticket：[12 Golden Path E2E Evidence](../../12-golden-path-e2e.md)；规格：[12-golden-path-e2e-spec.md](../spec/12-golden-path-e2e-spec.md)。
+> 状态：`implemented-unverified`（公开 Execute/Verify/Commit/FinalVerify 驱动代码已落地，尚未形成真实验收证据）。本次按用户授权偏离上游阻塞；父 Ticket：[12 Golden Path E2E Evidence](../../12-golden-path-e2e.md)；规格：[12-golden-path-e2e-spec.md](../spec/12-golden-path-e2e-spec.md)。
 >
 > 顶层硬阻塞：Ticket 11 的真实 acceptance evidence 未形成前不得开始实现；本子票直接要求 Ticket 09/10 的真实 Worktree、Verify、Commit 与 Final Verify acceptance evidence。
 
@@ -8,7 +8,7 @@
 
 **Blocked by：** Ticket 11 的真实 acceptance evidence；Ticket 09 与 Ticket 10 的真实 acceptance evidence；12-03 公开 Planning 与 Canonical Ticket Graph 驱动。
 
-**Status：** ready-for-agent（仅文档成熟度）
+**Status：** implemented-unverified（仅表示代码已落地，不表示 GoldenPathEvidence）
 
 ## Scope
 
