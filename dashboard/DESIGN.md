@@ -13,6 +13,8 @@ Keystone Dashboard 是本机单操作者使用的 Control Plane Client，用于�
 - [Ticket 11 — Dashboard Observation](../docs/FE20260903080401/tickets/11-dashboard-observation.md)：固定四个页面、Daemon 托管、Query 优先、SSE 只作刷新提示以及 Command/Decision 边界。
 - 已确认的视觉基线：同源生产托管、显式 URL 路由、深色开发者控制台、桌面优先的响应式布局、TDesign React 组件、无 optimistic update 和有界 Trace/Artifact 展示。
 - [当前 Dashboard 入口](./src/main.tsx) 与 [当前样式](./src/styles.css)：五个页面已共用本文件的深色 token、导航和响应式 shell；Create Change 的具体写入边界由实施契约约束。
+- [Dashboard 间距与高保真实施契约](../ui-contracts/dashboard-spacing-fidelity.json)：记录 Create Change 的双栏结构、留白节奏、响应式断点和验证范围。
+- [Dashboard 间距独立 UI 审阅](../reviews/ui/dashboard-spacing-fidelity-2026-09-10-r1.md)：记录 1440px、1024px 和 375px 实际渲染的布局、溢出、焦点和交互证据。
 - [Dashboard package](./package.json)：当前使用 React、TypeScript、Vite、TDesign React、TDesign icons 和 React Router，依赖版本已写入锁文件。
 - `tdesign-mcp-server` React 组件清单、组件文档和 DOM 资料：确认使用 `Layout`、`Menu`、`Breadcrumb`、`Card`、`Table`、`Tree`、`Timeline`、`Tag`、`Alert`、`Dialog`、`Drawer`、`Skeleton`、`Empty`、`Result`、`Button`、`Popconfirm`、`Statistic`、`Space`、`Typography` 等组件。
 
@@ -35,10 +37,10 @@ Keystone Dashboard 是本机单操作者使用的 Control Plane Client，用于�
 ### Global shell
 
 - 使用 TDesign `Layout` 组合 `Header`、`Aside` 和 `Content`。
-- 桌面端侧边栏宽度为 `232px`，折叠后为 `64px`；顶部栏高度为 `64px`。
+- 桌面端侧边栏宽度为 `232px`，顶部栏高度为 `64px`；响应式紧凑侧栏在 `<=1199px`、`<=767px` 和 `<=420px` 分别收窄为 `190px`、`58px` 和 `48px`。
 - 侧边导航使用 TDesign `Menu`，固定入口为 `Projects`、`Create Change` 和 `Needs Human`；详情页通过 `Breadcrumb` 返回所属 Project 或 Change。
 - 顶部栏显示 `Keystone`、当前 Daemon readiness、Worker health 摘要和数据新鲜度；不显示 `database_path`、WorkspacePath、Lease 或 secret。
-- 主内容区域默认内边距 `24px`，最大内容宽度 `1440px`，避免超宽屏上信息行过长。
+- 主内容区域最大内容宽度为 `1440px`，桌面内边距为 `32px 36px 64px`；在 `<=1199px`、`<=767px` 和 `<=420px` 分别收窄为 `24px`、`20px 16px 36px` 和 `16px 12px 30px`，避免内容贴边或在窄屏堆叠。
 - `/` 默认进入 Projects；创建页路由为 `/changes/new`，详情路由固定为 `/projects/:project_id`、`/changes/:change_id`、`/needs-human`。
 - Daemon 对前端未知路径回退 `index.html`，`/v1` 和 SSE 路径不参与 SPA 回退。
 
@@ -128,6 +130,8 @@ Keystone Dashboard 是本机单操作者使用的 Control Plane Client，用于�
 - 操作按钮之间至少保留 `8px`；危险操作不得紧贴主操作。
 - 交互目标最小尺寸为 `40px`，图标按钮必须有 tooltip 和可访问名称。
 - 表格列优先保证状态、标题和操作可读；技术 ID 可以使用等宽字体和省略。
+- Create Change 的表单字段之间使用 `24px`，表单卡片 body 使用 `25px`，说明卡片沿用 `20px` 内边距；桌面双栏之间使用 `16px`。
+- Create Change 的选择框和单行输入框高度为 `42px`，Intent 文本域最小高度为 `176px`，提交和取消操作的可点击高度至少为 `40px`。
 
 ## Radius, Border, Elevation
 
@@ -173,6 +177,8 @@ Keystone Dashboard 是本机单操作者使用的 Control Plane Client，用于�
 - 幂等键默认由界面生成；高级区允许用户查看和手动覆盖。未修改表单的重试复用自动键，修改 Project 或 Intent 后生成新自动键；手动键由用户负责保持。
 - Project 选择、Intent 和自动幂等键保存至当前浏览器会话，关闭浏览器后清除。
 - 提交期间禁用表单和重复提交；失败时保留全部输入，提供中文恢复说明，并在高级详情显示服务端错误码。
+- 表单使用 `form-shell` 双栏结构：桌面端主表单占据剩余空间，右侧 `298px` 说明卡提供提交前约束和重试提示；整体最大宽度为 `1160px`，两栏间距为 `16px`。
+- 在 `<=1080px` 时表单折叠为单栏，说明卡位于主表单之后；折叠只改变布局顺序，不改变 Project、Intent、幂等键和错误反馈的语义。
 
 ## Forms and Feedback
 
@@ -202,9 +208,11 @@ Ticket 11 不引入业务图表。可视化只服务于观察：
 
 ## Responsive Behavior
 
-- `>=1200px`：显示完整侧边栏、多列摘要卡片和完整表格。
-- `768px–1199px`：侧边栏可折叠，摘要卡片换行，详情区域减少并列列数。
-- `<768px`：侧边栏折叠为可打开导航，所有卡片单列，Trace 和 Health 纵向排列。
+- `>=1200px`：显示 `232px` 完整侧边栏、多列摘要卡片和完整表格；Create Change 保持主表单与 `298px` 说明卡的双栏结构。
+- `1081px–1199px`：侧边栏收窄为 `190px`，摘要卡片换行，详情区域减少并列列数；Create Change 仍保留双栏表单。
+- `768px–1080px`：侧边栏保持 `190px`，Create Change 折叠为单栏，说明卡移动到表单下方。
+- `421px–767px`：侧边栏收窄为 `58px` 的紧凑导航轨，菜单文字视觉隐藏但保留可访问语义，卡片和详情区域单列。
+- `<=420px`：侧边栏收窄为 `48px`，内容区使用 `12px` 水平内边距，所有卡片单列并保持表单控件的最小可操作尺寸。
 - 表格不强制压缩技术字段；窄屏允许水平滚动，关键状态和操作列保持可见。
 - `Tree` 和 `Timeline` 在窄屏保留语义顺序，不改为仅颜色或图标表达。
 - 不建设独立移动端信息架构，不改变五个固定页面和 URL 路由。
@@ -268,3 +276,4 @@ Ticket 11 不引入业务图表。可视化只服务于观察：
 | 2026-09-08 | 采用 `Layout` + `Menu` + `Breadcrumb` 的桌面优先响应式 shell | 适配四个固定页面和本机工程控制台的高密度观察场景 | 当前设计基线 |
 | 2026-09-08 | 失败和断线保留最后快照并显式标记 stale | 让观察者区分旧事实、查询失败和权威状态变化 | 当前设计基线 |
 | 2026-09-10 | 采用深色开发者控制台视觉，并覆盖现有页面和 Create Change 页面 | 用户确认当前视觉不符合要求；统一深色 token、导航、表单与状态规则，避免新旧页面割裂 | 当前设计基线 |
+| 2026-09-11 | 固化 Dashboard 的留白节奏、Create Change 双栏结构和窄屏断点 | 修复间距过小造成的内容堆叠，并将已通过 1440px、1024px、375px 浏览器审阅的实现约束回写为设计基线 | 当前设计基线 |
