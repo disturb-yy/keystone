@@ -297,6 +297,31 @@ make dashboard-build
 
 等价命令为在 `dashboard/` 下运行 `npm ci` 和 `npm run build`，产物位于 `dashboard/dist`。
 
+### 完整运行 Dashboard（推荐）
+
+在仓库根目录执行以下命令。`keystone daemon stop` 只在已有旧实例时执行；它用于确保 Daemon 重新加载刚构建的 `dashboard/dist`：
+
+```bash
+export PATH="$PWD/bin:$PATH"
+keystone daemon stop
+keystone daemon start
+keystone daemon status
+```
+
+保持 Daemon 运行，在本地数据根的 `runtime/instance.json` 中读取 `endpoint`，然后在浏览器打开对应的 `http://127.0.0.1:<port>` 地址。使用自定义数据根时，启动、停止和状态命令都附加相同的 `--data-dir`。
+
+### 仅运行 Vite 开发前端
+
+如果只需要查看前端页面壳层或进行样式开发，可在另一个终端执行：
+
+```bash
+cd dashboard
+npm ci
+npm run dev -- --host 127.0.0.1
+```
+
+浏览器打开 [http://127.0.0.1:5173](http://127.0.0.1:5173)。当前 `vite.config.ts` 没有配置 `/v1` 代理，Vite 页面会用相对路径请求 API，因此 Project、Change 等真实数据和写操作请使用上面的 Daemon 同源托管方式。
+
 从仓库根启动 Daemon 时，默认读取 `dashboard/dist`。为了从任意目录使用，先停止同一数据根的既有 Daemon，再在独立终端前台启动并显式指定静态资源路径：
 
 ```bash
@@ -314,8 +339,6 @@ keystone-daemon --dashboard-dir /absolute/path/to/keystone/dashboard/dist
 | Needs Human | `/needs-human` | 集中查看需要人工处理的工作及可用操作 |
 
 页面根据 Daemon 返回的 `available_actions` 提供操作；项目注册、需求创建以及 Execute/Verify/Commit 可按上述 CLI 流程完成。SSE `/v1/updates` 只发送刷新提示，页面据此重新查询。
-
-`npm run dev` 可启动 Vite 开发服务，但当前 `vite.config.ts` 未配置 `/v1` 代理，前端使用相对路径访问 API。因此独立 Vite 或 `npm run preview` 不能直接视为完整可用的控制台；连接真实 Daemon 的现成路径是上述同源静态托管。
 
 ## 本地数据
 
