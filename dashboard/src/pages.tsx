@@ -151,34 +151,47 @@ function CreateChangeForm({ projects, disabled, onCreated }: { projects: Project
 
   const submitDisabled = disabled || submitting || !selected || !draft.intent.trim() || !draft.idempotencyKey.trim()
   return (
-    <Card className="change-create-card" title="Change 请求">
-      <form className="change-create-form" onSubmit={(event) => void submit(event)} noValidate>
-        <div className="form-field">
-          <label htmlFor="target-project">目标 Project <span aria-hidden="true">*</span></label>
-          <select id="target-project" value={draft.projectID} onChange={onProjectChange} disabled={disabled || submitting} required aria-required="true" aria-invalid={Boolean(validationError)} aria-describedby={validationError ? 'target-project-help change-create-validation' : 'target-project-help'} aria-errormessage={validationError ? 'change-create-validation' : undefined}>
-            <option value="">选择已注册 Project</option>
-            {projects.map((project) => <option key={project.project_id} value={project.project_id}>{project.repository_root} · {project.project_id}</option>)}
-          </select>
-          <p id="target-project-help">仅可选择 Daemon 已注册的 Project，不支持手工输入路径。</p>
-        </div>
-        <div className="form-field">
-          <label htmlFor="change-intent">Intent <span aria-hidden="true">*</span></label>
-          <textarea id="change-intent" value={draft.intent} onChange={onIntentChange} disabled={disabled || submitting} required aria-required="true" aria-invalid={Boolean(validationError)} aria-describedby={validationError ? 'change-intent-help change-create-validation' : 'change-intent-help'} aria-errormessage={validationError ? 'change-create-validation' : undefined} placeholder="描述希望 AI 完成的需求" rows={7} />
-          <p id="change-intent-help">Keystone 将原样保存并提交此输入，不会由浏览器改写。</p>
-        </div>
-        <details className="idempotency-disclosure">
-          <summary>高级：幂等键</summary>
-          <div className="form-field advanced-field">
-            <label htmlFor="idempotency-key">Idempotency Key</label>
-            <input id="idempotency-key" value={draft.idempotencyKey} onChange={(event) => setKey(event.currentTarget.value)} disabled={disabled || submitting} spellCheck="false" />
-            <div className="idempotency-actions"><span>{draft.keyMode === 'automatic' ? '自动键：表单变更时轮换，未变更重试时复用。' : '手动键：界面不会自动改写。'}</span><Button variant="text" type="button" onClick={resetKey} disabled={disabled || submitting}>生成自动键</Button></div>
+    <div className="form-shell">
+      <Card className="change-create-card" title="Change 请求">
+        <form className="change-create-form" onSubmit={(event) => void submit(event)} noValidate>
+          <div className="form-field">
+            <label htmlFor="target-project">目标 Project <span aria-hidden="true">*</span></label>
+            <select id="target-project" value={draft.projectID} onChange={onProjectChange} disabled={disabled || submitting} required aria-required="true" aria-invalid={Boolean(validationError)} aria-describedby={validationError ? 'target-project-help change-create-validation' : 'target-project-help'} aria-errormessage={validationError ? 'change-create-validation' : undefined}>
+              <option value="">选择已注册 Project</option>
+              {projects.map((project) => <option key={project.project_id} value={project.project_id}>{project.repository_root} · {project.project_id}</option>)}
+            </select>
+            <p id="target-project-help">仅可选择 Daemon 已注册的 Project，不支持手工输入路径。</p>
           </div>
-        </details>
-        {validationError && <div id="change-create-validation" role="alert"><Alert theme="warning" message={validationError} /></div>}
-        {submitError && <div className="create-error" role="alert"><Alert theme="error" message={changeDraftError(submitError)} /><details><summary>技术详情</summary><code>{submitError instanceof APIError ? submitError.code : 'network_error'}</code></details></div>}
-        <div className="change-create-actions"><LinkButton to="/">取消</LinkButton><Button theme="primary" type="submit" loading={submitting} disabled={submitDisabled}>创建 Change</Button></div>
-      </form>
-    </Card>
+          <div className="form-field">
+            <label htmlFor="change-intent">Intent <span aria-hidden="true">*</span></label>
+            <textarea id="change-intent" value={draft.intent} onChange={onIntentChange} disabled={disabled || submitting} required aria-required="true" aria-invalid={Boolean(validationError)} aria-describedby={validationError ? 'change-intent-help change-create-validation' : 'change-intent-help'} aria-errormessage={validationError ? 'change-create-validation' : undefined} placeholder="描述希望 AI 完成的需求" rows={7} />
+            <p id="change-intent-help">Keystone 将原样保存并提交此输入，不会由浏览器改写。</p>
+          </div>
+          <details className="idempotency-disclosure">
+            <summary>高级：幂等键</summary>
+            <div className="form-field advanced-field">
+              <label htmlFor="idempotency-key">Idempotency Key</label>
+              <input id="idempotency-key" value={draft.idempotencyKey} onChange={(event) => setKey(event.currentTarget.value)} disabled={disabled || submitting} spellCheck="false" />
+              <div className="idempotency-actions"><span>{draft.keyMode === 'automatic' ? '自动键：表单变更时轮换，未变更重试时复用。' : '手动键：界面不会自动改写。'}</span><Button variant="text" type="button" onClick={resetKey} disabled={disabled || submitting}>生成自动键</Button></div>
+            </div>
+          </details>
+          {validationError && <div id="change-create-validation" role="alert"><Alert theme="warning" message={validationError} /></div>}
+          {submitError && <div className="create-error" role="alert"><Alert theme="error" message={changeDraftError(submitError)} /><details><summary>技术详情</summary><code>{submitError instanceof APIError ? submitError.code : 'network_error'}</code></details></div>}
+          <div className="change-create-actions"><LinkButton to="/">取消</LinkButton><Button theme="primary" type="submit" loading={submitting} disabled={submitDisabled}>创建 Change</Button></div>
+        </form>
+      </Card>
+      <aside className="change-create-side" aria-label="Before you submit">
+        <Card>
+          <Typography.Title level="h4">Before you submit</Typography.Title>
+          <Typography.Paragraph>选择的 Project 必须已注册。创建不会修改原始仓库工作区；Daemon 会在固定 revision 上推进后续生命周期。</Typography.Paragraph>
+          <ul>
+            <li>可在高级区查看或编辑幂等键</li>
+            <li>网络异常后，未更改内容可安全重试</li>
+            <li>关闭浏览器会清除本次草稿</li>
+          </ul>
+        </Card>
+      </aside>
+    </div>
   )
 }
 

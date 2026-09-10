@@ -1,0 +1,132 @@
+{
+  "version": 1,
+  "task_id": "dashboard-spacing-fidelity-2026-09-10",
+  "actor_id": "/root/dashboard_spacing_implementation",
+  "actor_skill": "coding-frontend",
+  "classification": "Large",
+  "phase": "implementation",
+  "active_gate": "G7",
+  "next_action": "delegate_write",
+  "objective": "使生产 Dashboard 恢复已批准高保真原型的页面留白、Create Change 双栏结构与响应式降级行为，消除狭窄间距导致的视觉堆叠。",
+  "scope": [
+    "恢复 Dashboard shell 与 Create Change 页面在批准原型中已定义的布局留白、卡片内边距和交互目标尺寸",
+    "恢复 Create Change 桌面双栏说明区，并在中小视口有序降级为单列",
+    "为高保真结构、目标尺寸、无横向溢出和已有创建路径补充或收紧浏览器回归"
+  ],
+  "required_skills": [
+    "coding-frontend",
+    "exploring-project",
+    "reviewing-ui"
+  ],
+  "inputs": {
+    "repository_root": "/tmp/keystone-dashboard-spacing-fidelity",
+    "project_slug": "keystone",
+    "master_design_system": "dashboard/DESIGN.md",
+    "page_override": "dashboard/DESIGN.md#Create Change",
+    "wireframe": "wireframes/dashboard.md",
+    "visual_prototype": "prototypes/dashboard.html",
+    "api_contracts": [
+      "contracts/controlplane/contract.go",
+      "internal/daemon/change_http.go"
+    ]
+  },
+  "approvals": {
+    "design_system": {
+      "status": "approved",
+      "evidence": "现有 dashboard/DESIGN.md 是当前深色控制台基线；本次只恢复其中的已定义间距与响应式规则。",
+      "skip_reason": ""
+    },
+    "wireframe": {
+      "status": "approved",
+      "evidence": "wireframes/dashboard.md 已记录 Dashboard 页面结构；本次不改变信息架构。",
+      "skip_reason": ""
+    },
+    "visual_prototype": {
+      "status": "approved",
+      "evidence": "prototypes/dashboard.html 是现有高保真实现依据；用户本次要求生产页与其一致。",
+      "skip_reason": ""
+    },
+    "implementation_contract": {
+      "status": "approved",
+      "evidence": "用户明确要求修复前端间距、堆叠和高保真偏离。",
+      "skip_reason": ""
+    }
+  },
+  "ownership": {
+    "writable_paths": [
+      "dashboard/src/components.tsx",
+      "dashboard/src/pages.tsx",
+      "dashboard/src/styles.css",
+      "dashboard/e2e/change-create.spec.ts"
+    ],
+    "read_only_paths": [
+      "dashboard/DESIGN.md",
+      "wireframes/dashboard.md",
+      "prototypes/dashboard.html",
+      "dashboard/src/main.tsx",
+      "dashboard/src/api.ts",
+      "dashboard/src/hooks.ts",
+      "contracts/controlplane/**",
+      "internal/daemon/**"
+    ],
+    "forbidden_paths": [
+      "contracts/**",
+      "internal/**",
+      "cmd/**",
+      "go.mod",
+      "go.sum",
+      "dashboard/package.json",
+      "dashboard/package-lock.json",
+      "migrations/**",
+      "dashboard/DESIGN.md",
+      "wireframes/**",
+      "prototypes/**"
+    ]
+  },
+  "design_constraints": {
+    "may_change_layout": true,
+    "may_change_tokens": false,
+    "may_change_interaction": false,
+    "may_change_component_api": false,
+    "may_add_dependency": false,
+    "may_change_information_hierarchy": false
+  },
+  "validation": [
+    "python3 /home/jadon/tool/ai-coding/skills/ui/ui-ux-control-plane/scripts/validate_contract.py ui-contracts/dashboard-spacing-fidelity.json",
+    "python3 /home/jadon/tool/ai-coding/skills/ui/ui-ux-control-plane/scripts/pre_write_guard.py --contract ui-contracts/dashboard-spacing-fidelity.json --actor-skill coding-frontend --path <each writable path>",
+    "npm run lint",
+    "npm run build",
+    "TMPDIR=/tmp/keystone-playwright.<temporary> npm run test:e2e",
+    "Playwright 在 375、768、1024、1440 宽度检查 /changes/new 的默认、empty、error、焦点与无横向溢出",
+    "git diff --check",
+    "独立 reviewing-ui 复核提交后的固定 Git 差异目标"
+  ],
+  "review": {
+    "required": true,
+    "implementation_actor_id": "/root/dashboard_spacing_implementation",
+    "reviewer_actor_id": "/root/dashboard_spacing_ui_reviewer",
+    "target": {
+      "kind": "stable_artifact",
+      "stable_id": "dashboard-spacing-fidelity-2026-09-10-r1"
+    },
+    "blocking_findings": []
+  },
+  "expected_output": {
+    "format": "Dashboard 布局修复实施报告",
+    "must_report": [
+      "changed_files",
+      "approved-prototype alignment",
+      "validation_commands",
+      "validation_results",
+      "runtime viewport evidence",
+      "design deviations",
+      "immutable review target",
+      "residual_risks"
+    ]
+  },
+  "stop_if": [
+    "实现需要修改 Control Plane API、后端、路由、文案语义或依赖",
+    "已批准原型与 dashboard/DESIGN.md 的现有约束无法同时满足",
+    "修复需要超出列出的文件"
+  ]
+}

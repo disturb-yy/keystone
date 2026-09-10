@@ -55,10 +55,14 @@ async function openCreateChange(page: Page): Promise<void> {
   await page.goto('/changes/new', { waitUntil: 'commit' })
 }
 
+async function expectDaemonReady(page: Page): Promise<void> {
+  await expect(page.getByRole('status').filter({ hasText: 'Daemon 已就绪' })).toContainText('Daemon 已就绪')
+}
+
 test('从已注册 Project 创建 Change，并保留原始 Intent 和幂等键', async ({ page }) => {
   const mock = await mockControlPlane(page, [{ project_id: 'project-001', repository_root: '/work/demo', created_at: '2026-09-10T00:00:00Z' }])
   await openCreateChange(page)
-  await expect(page.getByRole('status')).toContainText('Daemon 已就绪')
+  await expectDaemonReady(page)
   await page.selectOption('#target-project', 'project-001')
   await page.locator('#change-intent').fill('实现 Create Change 表单\n保留原始输入。')
   await page.getByRole('button', { name: '创建 Change' }).click()
@@ -105,12 +109,59 @@ test('在当前浏览器会话中保留未提交草稿', async ({ page }) => {
   await expect(page.locator('#change-intent')).toHaveValue('会话草稿 Intent')
 })
 
+test('Create Change 在桌面端恢复双栏留白，并在窄屏折叠为单栏', async ({ page }) => {
+  await mockControlPlane(page, [{ project_id: 'project-001', repository_root: '/work/demo', created_at: '2026-09-10T00:00:00Z' }])
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await openCreateChange(page)
+  await expectDaemonReady(page)
+  await expect(page.locator('.form-shell')).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Before you submit' })).toBeVisible()
+
+  const desktopLayout = await page.locator('.form-shell').evaluate((shell) => {
+    const formCard = shell.querySelector<HTMLElement>('.change-create-card')
+    const sideCard = shell.querySelector<HTMLElement>('.change-create-side .t-card')
+    const formBody = formCard?.querySelector<HTMLElement>('.t-card__body')
+    const sideBody = sideCard?.querySelector<HTMLElement>('.t-card__body')
+    const select = document.querySelector<HTMLElement>('#target-project')
+    const intent = document.querySelector<HTMLElement>('#change-intent')
+    const submit = document.querySelector<HTMLElement>('.change-create-actions .t-button')
+    const formRect = formCard?.getBoundingClientRect()
+    const sideRect = sideCard?.getBoundingClientRect()
+    const styles = getComputedStyle(shell)
+    return {
+      columns: styles.gridTemplateColumns.split(' ').filter(Boolean).length,
+      gap: styles.gap,
+      formPadding: formBody ? getComputedStyle(formBody).paddingTop : '',
+      sidePadding: sideBody ? getComputedStyle(sideBody).paddingTop : '',
+      selectHeight: select?.getBoundingClientRect().height ?? 0,
+      textareaMinHeight: intent ? parseFloat(getComputedStyle(intent).minHeight) : 0,
+      submitHeight: submit?.getBoundingClientRect().height ?? 0,
+      sideStartsAfterForm: Boolean(formRect && sideRect && sideRect.left > formRect.left + formRect.width),
+    }
+  })
+  expect(desktopLayout).toEqual({ columns: 2, gap: '16px', formPadding: '25px', sidePadding: '20px', selectHeight: 42, textareaMinHeight: 176, submitHeight: 40, sideStartsAfterForm: true })
+
+  await page.setViewportSize({ width: 1024, height: 900 })
+  const compactLayout = await page.locator('.form-shell').evaluate((shell) => {
+    const formCard = shell.querySelector<HTMLElement>('.change-create-card')
+    const sideCard = shell.querySelector<HTMLElement>('.change-create-side .t-card')
+    const formRect = formCard?.getBoundingClientRect()
+    const sideRect = sideCard?.getBoundingClientRect()
+    return {
+      columns: getComputedStyle(shell).gridTemplateColumns.split(' ').filter(Boolean).length,
+      sideStacksBelowForm: Boolean(formRect && sideRect && sideRect.top >= formRect.bottom),
+      horizontalOverflow: document.documentElement.scrollWidth > window.innerWidth,
+    }
+  })
+  expect(compactLayout).toEqual({ columns: 1, sideStacksBelowForm: true, horizontalOverflow: false })
+})
+
 for (const width of [375, 768, 1024, 1440]) {
   test(`在 ${width}px 宽度保留深色、可聚焦且无页面横向溢出的创建页`, async ({ page }) => {
     await mockControlPlane(page, [{ project_id: 'project-001', repository_root: '/work/demo', created_at: '2026-09-10T00:00:00Z' }])
     await page.setViewportSize({ width, height: 900 })
     await openCreateChange(page)
-    await expect(page.getByRole('status')).toContainText('Daemon 已就绪')
+    await expectDaemonReady(page)
     const projectSelect = page.locator('#target-project')
     await expect(projectSelect).toBeVisible()
     await projectSelect.focus()
